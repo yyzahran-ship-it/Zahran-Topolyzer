@@ -73,7 +73,7 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'BAD-D': [0, 30], 'TBI': [0, 1.05], 'CBI': [0, 1.05],
   'ISV': [0, 300], 'IVA': [0, 3], 'KI': [0.5, 2.5], 'CKI': [0, 2],
   'IHA': [0, 360], 'IHD': [0, 0.5], 'Rmin': [3, 10], 'ART-Max': [0, 600],
-  'SIf': [0, 300], 'SIb': [0, 300], 'DSI': [0, 300], 'OSI': [0, 300],
+  'SIf': [-10, 10], 'SIb': [-10, 10], 'DSI': [-10, 300], 'OSI': [0, 300],
   'CSI': [0, 300], 'IAI': [0, 300], 'AAI': [0, 300],
   'PPI-Avg': [0, 5], 'PPI-Min': [0, 5], 'PRFI': [0, 30],
   'KISA%': [0, 2000], 'SRAX': [0, 360], 'SAI': [0, 10], 'SRI': [0, 10],
@@ -443,11 +443,12 @@ export async function analyzeWithOCR(
 
   const fullText = words.map((w) => w.text).join(' ').toLowerCase();
   let device = 'Unknown';
-  if (/pentacam|oculus/i.test(fullText))  device = 'Pentacam';
-  else if (/sirius|cso/i.test(fullText))  device = 'Sirius';
-  else if (/galilei|ziemer/i.test(fullText)) device = 'Galilei';
-  else if (/orbscan|bausch/i.test(fullText)) device = 'Orbscan';
-  else if (/atlas|zeiss/i.test(fullText)) device = 'Atlas';
+  if (/pentacam|oculus/i.test(fullText))       device = 'Pentacam';
+  // Sirius-specific labels: KVf, KVb, BCVf, BCVb — only found on CSO Sirius reports
+  else if (/sirius|cso|\bkvf\b|\bkv[bf]\b|\bbcv[fb]\b/i.test(fullText)) device = 'Sirius';
+  else if (/galilei|ziemer/i.test(fullText))   device = 'Galilei';
+  else if (/orbscan|bausch/i.test(fullText))   device = 'Orbscan';
+  else if (/atlas|zeiss/i.test(fullText))      device = 'Atlas';
 
   let eye: AnalysisResult['eye'] = 'unknown';
   if (/\bod\b|right\s+eye/i.test(fullText)) eye = 'OD';
