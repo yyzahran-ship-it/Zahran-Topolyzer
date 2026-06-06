@@ -1,4 +1,4 @@
-import { createWorker, PSM } from 'tesseract.js';
+import { createWorker } from 'tesseract.js';
 import { buildResult } from './classify';
 import type { AnalysisResult } from '../types/topography';
 
@@ -66,28 +66,94 @@ function parseNum(raw: string): number | null {
   return isNaN(n) ? null : n;
 }
 
-// Preprocess: upscale + grayscale + contrast boost → better Tesseract accuracy
-// on small or coloured medical device screenshots
+// Preprocess: upscale → grayscale → box blur → Otsu threshold → auto-invert.
+// Pure black-on-white output is what Tesseract performs best on.
+// The R/G/B channels of the ImageData are reused as temporary buffers to avoid
+// extra memory allocations (important on mobile).
 async function preprocessForOCR(dataUrl: string): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       const W = img.naturalWidth  || img.width  || 1;
       const H = img.naturalHeight || img.height || 1;
-      const scale = Math.min(3, Math.max(1, 2000 / Math.max(W, H)));
+      // Scale so the longer side is ~1800 px (enough for Tesseract, manageable on mobile)
+      const scale = Math.min(2.5, Math.max(1, 1800 / Math.max(W, H)));
+      const cw = Math.round(W * scale);
+      const ch = Math.round(H * scale);
+      const n  = cw * ch;
+
       const canvas = document.createElement('canvas');
-      canvas.width  = Math.round(W * scale);
-      canvas.height = Math.round(H * scale);
+      canvas.width  = cw;
+      canvas.height = ch;
       const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const d  = id.data;
-      for (let i = 0; i < d.length; i += 4) {
-        const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-        // Contrast ×1.8 centred on 128
-        const c = Math.round(Math.max(0, Math.min(255, (g - 128) * 1.8 + 128)));
-        d[i] = d[i + 1] = d[i + 2] = c;
+      ctx.drawImage(img, 0, 0, cw, ch);
+      const id = ctx.getImageData(0, 0, cw, ch);
+      const d  = id.data; // Uint8ClampedArray RGBA
+
+      // --- Step 1: grayscale → R channel ---
+      for (let i = 0; i < n; i++) {
+        const j = i * 4;
+        d[j] = Math.round(0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2]);
       }
+
+      // --- Step 2: box blur radius 2 (H pass: R→G, V pass: G→B) ---
+      const BLR = 2;
+      // Horizontal
+      for (let y = 0; y < ch; y++) {
+        let sum = 0, cnt = 0;
+        for (let x = 0; x < cw; x++) {
+          if (x + BLR < cw)      { sum += d[(y * cw + x + BLR) * 4];         cnt++; }
+          if (x - BLR - 1 >= 0)  { sum -= d[(y * cw + x - BLR - 1) * 4];     cnt--; }
+          if (x === 0) { for (let k = 0; k <= BLR && k < cw; k++) { sum += d[(y * cw + k) * 4]; cnt++; } }
+          d[(y * cw + x) * 4 + 1] = Math.round(sum / cnt);
+        }
+      }
+      // Vertical
+      for (let x = 0; x < cw; x++) {
+        let sum = 0, cnt = 0;
+        for (let y = 0; y < ch; y++) {
+          if (y + BLR < ch)      { sum += d[((y + BLR) * cw + x) * 4 + 1];     cnt++; }
+          if (y - BLR - 1 >= 0)  { sum -= d[((y - BLR - 1) * cw + x) * 4 + 1]; cnt--; }
+          if (y === 0) { for (let k = 0; k <= BLR && k < ch; k++) { sum += d[(k * cw + x) * 4 + 1]; cnt++; } }
+          d[(y * cw + x) * 4 + 2] = Math.round(sum / cnt);
+        }
+      }
+
+      // --- Step 3: Otsu threshold on B channel ---
+      const hist = new Int32Array(256);
+      for (let i = 0; i < n; i++) hist[d[i * 4 + 2]]++;
+      let sumAll = 0;
+      for (let i = 0; i < 256; i++) sumAll += i * hist[i];
+      let sumB = 0, wB = 0, maxVar = 0, thresh = 128;
+      for (let i = 0; i < 256; i++) {
+        wB += hist[i];
+        if (!wB) continue;
+        const wF = n - wB;
+        if (!wF) break;
+        sumB += i * hist[i];
+        const mB = sumB / wB;
+        const mF = (sumAll - sumB) / wF;
+        const v  = wB * wF * (mB - mF) ** 2;
+        if (v > maxVar) { maxVar = v; thresh = i; }
+      }
+
+      // --- Step 4: binarise + auto-invert ---
+      let whiteCount = 0;
+      for (let i = 0; i < n; i++) {
+        const v = d[i * 4 + 2] > thresh ? 255 : 0;
+        const j = i * 4;
+        d[j] = d[j + 1] = d[j + 2] = v;
+        d[j + 3] = 255;
+        if (v === 255) whiteCount++;
+      }
+      // If the image is mostly dark (white text on dark BG), invert it
+      if (whiteCount < n * 0.4) {
+        for (let i = 0; i < n; i++) {
+          const j = i * 4;
+          d[j] = d[j + 1] = d[j + 2] = 255 - d[j];
+        }
+      }
+
       ctx.putImageData(id, 0, 0);
       resolve(canvas.toDataURL('image/png'));
     };
@@ -126,11 +192,10 @@ export async function analyzeWithOCR(
     },
   });
 
-  // PSM 11 = Sparse text: best for medical device printouts where
-  // numbers and labels are scattered in multiple columns/areas.
-  await worker.setParameters({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    tessedit_pageseg_mode: PSM.SPARSE_TEXT as any,
+  // PSM 11 = Sparse text — best for scattered labels/numbers on medical reports
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (worker as any).setParameters({
+    tessedit_pageseg_mode: '11',
     preserve_interword_spaces: '1',
   });
 
@@ -147,7 +212,7 @@ export async function analyzeWithOCR(
     const { data } = await worker.recognize(processedUrl);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const page = data as any;
-    words = ((page.words ?? []) as Word[]).filter((w) => w.confidence > 10);
+    words = (page.words ?? []) as Word[];
     if (words.length > 0) {
       imgWidth  = Math.max(...words.map((w) => w.bbox.x1), 1);
       imgHeight = Math.max(...words.map((w) => w.bbox.y1), 1);
@@ -236,12 +301,16 @@ export async function analyzeWithOCR(
   }
 
   if (found.size === 0) {
+    // Show a sample of what OCR detected so the user can see if text was read at all
+    const sample = words.slice(0, 20).map((w) => w.text).filter(Boolean).join('  ');
     throw new Error(
       'No parameters found in this image.\n\n' +
+      (sample ? `OCR read: "${sample}"\n\n` : 'OCR detected no text.\n\n') +
       'Tips:\n' +
-      '• Screenshot the numbers panel — not only the colour map\n' +
-      '• Use a clear, unrotated, well-lit capture\n' +
-      '• Pentacam, Sirius, Galilei, Orbscan and Atlas are supported'
+      '• Screenshot the DATA/NUMBERS panel — not only the colour map\n' +
+      '• Crop the image to show just the parameter table\n' +
+      '• Use a clear, high-resolution, unrotated screenshot\n' +
+      '• Supported: Pentacam, Sirius, Galilei, Orbscan, Atlas'
     );
   }
 
