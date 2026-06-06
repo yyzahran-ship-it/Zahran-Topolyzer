@@ -168,12 +168,19 @@ export async function analyzeWithOCR(
 ): Promise<AnalysisResult> {
   onProgress('Loading OCR engine…');
 
-  const href = window.location.href;
-  const base = href.substring(0, href.lastIndexOf('/') + 1);
+  // The page loads from file:///android_asset/ (no cleartext issue for navigation).
+  // But JavaScript's fetch() cannot access file:///android_asset/ URLs — Android
+  // explicitly excludes them from shouldInterceptRequest and from the JS fetch API.
+  //
+  // Solution: fetch Tesseract assets via http://localhost/ instead.
+  // These requests go through AppWebViewClient.shouldInterceptRequest, which serves
+  // them from APK assets WITHOUT making any real network connection — so the Android
+  // cleartext-traffic restriction never fires (it only applies to actual network I/O).
+  const tesseractBase = 'http://localhost/tesseract/';
 
   const [workerBlob, coreBlob] = await Promise.all([
-    fetch(base + 'tesseract/worker.min.js').then((r) => r.blob()),
-    fetch(base + 'tesseract/tesseract-core.wasm.js').then((r) => r.blob()),
+    fetch(tesseractBase + 'worker.min.js').then((r) => r.blob()),
+    fetch(tesseractBase + 'tesseract-core.wasm.js').then((r) => r.blob()),
   ]);
   const workerBlobUrl = URL.createObjectURL(workerBlob);
   const coreBlobUrl   = URL.createObjectURL(coreBlob);
@@ -181,7 +188,7 @@ export async function analyzeWithOCR(
   const worker = await createWorker('eng', 1, {
     workerPath:  workerBlobUrl,
     corePath:    coreBlobUrl,
-    langPath:    base + 'tesseract/',
+    langPath:    tesseractBase,
     cacheMethod: 'none' as const,
     logger: (m: { status: string; progress: number }) => {
       if (m.status === 'recognizing text') {
