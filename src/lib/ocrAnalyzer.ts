@@ -57,18 +57,86 @@ interface Word {
   bbox: { x0: number; y0: number; x1: number; y1: number };
 }
 
+// OCR words below this confidence level are treated as noise
+const MIN_CONFIDENCE = 40;
+
+// Plausible value ranges — values outside are rejected as mis-reads
+const RANGES: Partial<Record<string, [number, number]>> = {
+  'K1': [30, 65], 'K2': [30, 65], 'Kmax': [30, 70], 'Km': [30, 65],
+  'SimK1': [30, 65], 'SimK2': [30, 65], 'Flat K': [30, 65], 'Steep K': [30, 65],
+  'CCT': [200, 850], 'Thinnest Point': [200, 850], 'Pachymetry Min': [200, 850],
+  'Anterior Elevation': [-500, 500], 'Posterior Elevation': [-500, 500],
+  'BAD-D': [0, 30], 'TBI': [0, 1.05], 'CBI': [0, 1.05],
+  'ISV': [0, 300], 'IVA': [0, 3], 'KI': [0.5, 2.5], 'CKI': [0, 2],
+  'IHA': [0, 360], 'IHD': [0, 0.5], 'Rmin': [3, 10], 'ART-Max': [0, 600],
+  'SIf': [0, 300], 'SIb': [0, 300], 'DSI': [0, 300], 'OSI': [0, 300],
+  'CSI': [0, 300], 'IAI': [0, 300], 'AAI': [0, 300],
+  'PPI-Avg': [0, 5], 'PPI-Min': [0, 5], 'PRFI': [0, 30],
+  'KISA%': [0, 2000], 'SRAX': [0, 360], 'SAI': [0, 10], 'SRI': [0, 10],
+  'WTW': [8, 16], 'ACD': [1, 6], 'Corneal Volume': [20, 130],
+  'Astigmatism': [-15, 15], 'Q value': [-3, 1], 'HOA RMS': [0, 10],
+  'I-S value': [-20, 20],
+};
+
 // Extract numeric value from OCR'd text — tolerates units attached to digits
 function parseNum(raw: string): number | null {
-  // Replace comma decimal separator, strip non-numeric chars from edges
   const s = raw.replace(',', '.').replace(/[°µDmm%³]+$/i, '').replace(/^[^\d\-]+/, '');
   if (!s || !/\d/.test(s)) return null;
   const n = parseFloat(s);
   return isNaN(n) ? null : n;
 }
 
+/**
+ * Find the nearest valid numeric word to `label` using 2D spatial proximity
+ * rather than linear word-order. This prevents crossing column boundaries
+ * in multi-column report layouts (Pentacam, Sirius, Galilei, etc.).
+ *
+ * Tier 1: same row, to the right, within 32% of image width.
+ * Tier 2: one row below, roughly same horizontal zone.
+ */
+function nearbyNum(
+  label: Word,
+  pool: Word[],
+  imgW: number,
+  imgH: number,
+  patName?: string
+): Word | undefined {
+  const lCy = (label.bbox.y0 + label.bbox.y1) / 2;
+  const lX1 = label.bbox.x1;
+  const rowH = imgH * 0.028;
+
+  function valid(w: Word): boolean {
+    const n = parseNum(w.text);
+    if (n === null) return false;
+    const rng = patName ? RANGES[patName] : undefined;
+    return !rng || (n >= rng[0] && n <= rng[1]);
+  }
+
+  // Tier 1: same row, to the right
+  const tier1 = pool.filter(w => {
+    if (!valid(w)) return false;
+    const cy = (w.bbox.y0 + w.bbox.y1) / 2;
+    const cx = (w.bbox.x0 + w.bbox.x1) / 2;
+    return Math.abs(cy - lCy) <= rowH
+        && cx > lX1 - imgW * 0.01
+        && cx <= lX1 + imgW * 0.32;
+  });
+  if (tier1.length) return tier1.sort((a, b) => a.bbox.x0 - b.bbox.x0)[0];
+
+  // Tier 2: one row below, similar horizontal zone
+  const tier2 = pool.filter(w => {
+    if (!valid(w)) return false;
+    const cy = (w.bbox.y0 + w.bbox.y1) / 2;
+    const cx = (w.bbox.x0 + w.bbox.x1) / 2;
+    return cy > lCy + rowH * 0.3
+        && cy <= lCy + rowH * 2.5
+        && cx >= label.bbox.x0 - imgW * 0.04
+        && cx <= lX1 + imgW * 0.22;
+  });
+  return tier2.sort((a, b) => (a.bbox.y0 - b.bbox.y0) || (a.bbox.x0 - b.bbox.x0))[0];
+}
+
 // Upscale image to ~2000px max side for better OCR detail.
-// Colors are preserved — Tesseract's internal preprocessing works better
-// on color/grayscale than on our externally-binarized version.
 async function preprocessForOCR(dataUrl: string): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
@@ -76,7 +144,7 @@ async function preprocessForOCR(dataUrl: string): Promise<string> {
       const W = img.naturalWidth  || img.width  || 1;
       const H = img.naturalHeight || img.height || 1;
       const scale = Math.min(3, Math.max(1, 2000 / Math.max(W, H)));
-      if (scale <= 1.05) { resolve(dataUrl); return; } // already large enough
+      if (scale <= 1.05) { resolve(dataUrl); return; }
       const canvas = document.createElement('canvas');
       canvas.width  = Math.round(W * scale);
       canvas.height = Math.round(H * scale);
@@ -92,20 +160,6 @@ export async function analyzeWithOCR(
   imageDataUrl: string,
   onProgress: (msg: string) => void
 ): Promise<AnalysisResult> {
-  // Page origin: http://localhost/ (via loadDataWithBaseURL in MainActivity).
-  // Workers are blob:http://localhost/ — same origin as the page.
-  //
-  // What works:
-  //   importScripts(http://localhost/...) from worker → intercepted by shouldInterceptRequest ✓
-  //   fetch(blob:http://localhost/UUID) from worker  → internal browser, no network needed ✓
-  //   fetch(http://localhost/...) from main thread   → intercepted by shouldInterceptRequest ✓
-  //
-  // What doesn't work:
-  //   fetch(http://localhost/...) from worker        → bypasses shouldInterceptRequest on this device ✗
-  //
-  // Strategy: pre-fetch eng.traineddata in the main thread, store as a blob URL.
-  // Inject a tiny patch at the top of the worker that redirects .traineddata
-  // fetch/XHR to that blob URL — eliminating the need for any worker http:// fetch.
   const tesseractBase = 'http://localhost/tesseract/';
 
   onProgress('Downloading language model…');
@@ -116,24 +170,20 @@ export async function analyzeWithOCR(
 
   onProgress('Preparing OCR engine…');
 
-  // blob:http://localhost/UUID — same origin as the worker → fetchable internally ✓
   const langBlobUrl = URL.createObjectURL(
     new Blob([langBuffer], { type: 'application/octet-stream' })
   );
 
-  // Tiny patch: redirect any .traineddata fetch/XHR to the pre-loaded blob URL.
-  // Core still loads via importScripts(corePath) which IS intercepted ✓
   const patch = `(function(){var D=${JSON.stringify(langBlobUrl)};var _f=self.fetch.bind(self);self.fetch=function(u,o){return(typeof u==='string'&&u.indexOf('.traineddata')!==-1)?_f(D,o):_f(u,o);};var _x=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var a=[].slice.call(arguments);if(typeof u==='string'&&u.indexOf('.traineddata')!==-1)a[1]=D;return _x.apply(this,a);};})();\n`;
 
-  // Worker blob: patch (~300 B) + worker.min.js (109 KB) — much lighter than v2.4's 9 MB
   const workerBlobUrl = URL.createObjectURL(
     new Blob([patch, workerText], { type: 'application/javascript' })
   );
 
   const worker = await createWorker('eng', 1, {
     workerPath:  workerBlobUrl,
-    corePath:    tesseractBase + 'tesseract-core-lstm.wasm.js', // importScripts ✓
-    langPath:    tesseractBase,                                  // redirected by patch ✓
+    corePath:    tesseractBase + 'tesseract-core-lstm.wasm.js',
+    langPath:    tesseractBase,
     cacheMethod: 'none' as const,
     logger: (m: { status: string; progress: number }) => {
       if (m.status === 'recognizing text') {
@@ -158,12 +208,6 @@ export async function analyzeWithOCR(
   onProgress('Preprocessing image…');
   const processedUrl = await preprocessForOCR(imageDataUrl);
 
-  // Convert to raw JPEG/PNG bytes before sending to the worker.
-  // Passing a data: URL string forces the worker to fetch/decode it using
-  // createImageBitmap or OffscreenCanvas — both can silently fail in Android
-  // WebView workers, returning a blank image that yields 0 words.
-  // Passing Uint8Array gives Leptonica (inside the WASM) the raw compressed
-  // bytes to decode natively, bypassing all browser image API issues.
   const b64 = processedUrl.slice(processedUrl.indexOf(',') + 1);
   const binaryStr = atob(b64);
   const imgBytes = new Uint8Array(binaryStr.length);
@@ -176,19 +220,18 @@ export async function analyzeWithOCR(
   let imgHeight = 1;
 
   try {
-    // Request blocks:true — Tesseract.js v5+ removed top-level data.words.
-    // Words are now nested: data.blocks[].paragraphs[].lines[].words[]
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data } = await worker.recognize(imgBytes as any, {}, { blocks: true } as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const page = data as any;
 
-    // Flatten the block→paragraph→line→word hierarchy
     for (const block of (page.blocks ?? [])) {
       for (const para of (block.paragraphs ?? [])) {
         for (const line of (para.lines ?? [])) {
           for (const word of (line.words ?? [])) {
-            words.push(word as Word);
+            const w = word as Word;
+            // Skip low-confidence words — they cause false label/value matches
+            if (w.confidence >= MIN_CONFIDENCE) words.push(w);
           }
         }
       }
@@ -206,7 +249,7 @@ export async function analyzeWithOCR(
 
   onProgress('Parsing parameters…');
 
-  // Group words into lines by Y proximity (1.5% of image height)
+  // Group words into lines by Y-centre proximity (1.5% of image height)
   const lineThreshold = imgHeight * 0.015;
   const lines: Word[][] = [];
   for (const word of words) {
@@ -221,51 +264,71 @@ export async function analyzeWithOCR(
 
   const found = new Map<string, { value: number; unit: string; x: number; y: number; w: number; h: number }>();
 
-  function recordHit(pat: { name: string; unit: string }, numWord: Word) {
+  // Record a found parameter, spanning bbox from label to value.
+  // Validates value is within the plausible range for this parameter.
+  function recordHit(pat: { name: string; unit: string }, labelWord: Word, numWord: Word) {
     if (found.has(pat.name)) return;
     const value = parseNum(numWord.text);
     if (value === null) return;
+    const rng = RANGES[pat.name];
+    if (rng && (value < rng[0] || value > rng[1])) return;
+
+    const lCy = (labelWord.bbox.y0 + labelWord.bbox.y1) / 2;
+    const nCy = (numWord.bbox.y0 + numWord.bbox.y1) / 2;
+    const sameRow = Math.abs(lCy - nCy) < imgHeight * 0.028;
+
+    // If label and value are on the same row, draw a box that covers both.
+    // If value is below the label, just annotate the value's position.
+    const x0 = sameRow ? Math.min(labelWord.bbox.x0, numWord.bbox.x0) : numWord.bbox.x0;
+    const y0 = sameRow ? Math.min(labelWord.bbox.y0, numWord.bbox.y0) : numWord.bbox.y0;
+    const x1 = sameRow ? Math.max(labelWord.bbox.x1, numWord.bbox.x1) : numWord.bbox.x1;
+    const y1 = sameRow ? Math.max(labelWord.bbox.y1, numWord.bbox.y1) : numWord.bbox.y1;
+
     found.set(pat.name, {
       value, unit: pat.unit,
-      x: ((numWord.bbox.x0 + numWord.bbox.x1) / 2) / imgWidth,
-      y: ((numWord.bbox.y0 + numWord.bbox.y1) / 2) / imgHeight,
-      w: (numWord.bbox.x1 - numWord.bbox.x0) / imgWidth,
-      h: (numWord.bbox.y1 - numWord.bbox.y0) / imgHeight,
+      x: (x0 + x1) / 2 / imgWidth,
+      y: (y0 + y1) / 2 / imgHeight,
+      w: (x1 - x0) / imgWidth,
+      h: (y1 - y0) / imgHeight,
     });
   }
 
-  // Pass 1: full-line text — label and value on same line
+  // Pass 1: match full line text, then locate the label word and search spatially
   for (const line of lines) {
     const lineText = line.map((w) => w.text).join(' ');
     for (const pat of PARAM_PATTERNS) {
       if (found.has(pat.name) || !pat.regex.test(lineText)) continue;
-      // Find the first numeric-looking word on the line
-      const numWord = line.find((w) => parseNum(w.text) !== null);
-      if (numWord) recordHit(pat, numWord);
+      let labelWord: Word | undefined;
+      for (let wi = 0; wi < line.length; wi++) {
+        const joined = line.slice(wi, wi + 2).map((w) => w.text).join(' ');
+        if (pat.regex.test(line[wi].text) || pat.regex.test(joined)) {
+          labelWord = line[wi];
+          break;
+        }
+      }
+      if (!labelWord) continue;
+      const numWord = nearbyNum(labelWord, line, imgWidth, imgHeight, pat.name);
+      if (numWord) recordHit(pat, labelWord, numWord);
     }
   }
 
-  // Pass 2: word-level lookahead — search up to 6 words ahead and 2 lines below
+  // Pass 2: spatial search across the full word pool — prevents crossing column boundaries
   for (const pat of PARAM_PATTERNS) {
     if (found.has(pat.name)) continue;
     outer: for (let li = 0; li < lines.length; li++) {
       const line = lines[li];
       for (let wi = 0; wi < line.length; wi++) {
-        // Test individual word, or joined with next word (handles "K max" split)
         const joined = line.slice(wi, wi + 2).map((w) => w.text).join(' ');
         if (!pat.regex.test(line[wi].text) && !pat.regex.test(joined)) continue;
-        const candidates = [
-          ...line.slice(wi + 1, wi + 7),
-          ...(lines[li + 1] ?? []).slice(0, 6),
-          ...(lines[li + 2] ?? []).slice(0, 4),
-        ];
-        const numWord = candidates.find((w) => parseNum(w.text) !== null);
-        if (numWord) { recordHit(pat, numWord); break outer; }
+        const labelWord = line[wi];
+        // Use spatial proximity search instead of linear lookahead
+        const numWord = nearbyNum(labelWord, words, imgWidth, imgHeight, pat.name);
+        if (numWord) { recordHit(pat, labelWord, numWord); break outer; }
       }
     }
   }
 
-  // Pass 3: reverse scan — value might appear BEFORE the label (some devices)
+  // Pass 3: value appears BEFORE label on the same line (reverse scan)
   for (const pat of PARAM_PATTERNS) {
     if (found.has(pat.name)) continue;
     outer: for (let li = 0; li < lines.length; li++) {
@@ -273,16 +336,21 @@ export async function analyzeWithOCR(
       for (let wi = 0; wi < line.length; wi++) {
         const joined = line.slice(wi, wi + 2).map((w) => w.text).join(' ');
         if (!pat.regex.test(line[wi].text) && !pat.regex.test(joined)) continue;
-        // Look BEFORE the label word
-        const candidates = line.slice(Math.max(0, wi - 5), wi);
-        const numWord = [...candidates].reverse().find((w) => parseNum(w.text) !== null);
-        if (numWord) { recordHit(pat, numWord); break outer; }
+        const labelWord = line[wi];
+        // Look left on the same line; respect value range
+        const before = line.slice(0, wi).filter(w => {
+          const n = parseNum(w.text);
+          if (n === null) return false;
+          const rng = RANGES[pat.name];
+          return !rng || (n >= rng[0] && n <= rng[1]);
+        });
+        const numWord = before[before.length - 1]; // closest to label
+        if (numWord) { recordHit(pat, labelWord, numWord); break outer; }
       }
     }
   }
 
   if (found.size === 0) {
-    // Show a sample of what OCR detected so the user can see if text was read at all
     const sample = words.slice(0, 20).map((w) => w.text).filter(Boolean).join('  ');
     throw new Error(
       'No parameters found in this image.\n\n' +
