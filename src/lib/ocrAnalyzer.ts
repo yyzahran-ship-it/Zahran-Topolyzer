@@ -104,54 +104,65 @@ export async function analyzeWithOCR(
   imageDataUrl: string,
   onProgress: (msg: string) => void
 ): Promise<AnalysisResult> {
-  onProgress('Loading OCR engine…');
-
-  // All Tesseract assets are fetched in the MAIN THREAD via http://localhost/,
-  // which goes through AppWebViewClient.shouldInterceptRequest (served from APK
-  // assets, no real network request, cleartext restriction never fires).
+  // Strategy: pre-fetch ALL assets in the main thread (shouldInterceptRequest
+  // is 100% reliable there). Then build a self-contained worker blob that needs
+  // zero network requests from the worker context, eliminating every blob://,
+  // importScripts, and fetch reliability issue on Android WebView file:// origins.
   //
-  // The worker is a blob:file:// URL. importScripts from such a worker goes
-  // through shouldInterceptRequest and works. But fetch() for the 4MB traineddata
-  // can hang. Solution: pre-fetch traineddata in the main thread, store as a
-  // same-origin blob URL, then patch self.fetch/XHR in the worker to redirect
-  // any traineddata request to that blob URL.
+  //  • coreText   — inlined at the top of the blob → TesseractCore defined
+  //  • importScripts patch — prevents the already-loaded core from reloading
+  //  • fetch/XHR patch — redirects traineddata to an inline base64 data URI
+  //  • workerText — Tesseract.js worker script (sees everything it needs)
   const tesseractBase = 'http://localhost/tesseract/';
 
   onProgress('Downloading OCR assets…');
-  const [workerText, langBuffer] = await Promise.all([
+  const [workerText, coreText, langBuffer] = await Promise.all([
     fetch(tesseractBase + 'worker.min.js').then((r) => r.text()),
+    fetch(tesseractBase + 'tesseract-core-lstm.wasm.js').then((r) => r.text()),
     fetch(tesseractBase + 'eng.traineddata').then((r) => r.arrayBuffer()),
   ]);
 
   onProgress('Preparing OCR engine…');
 
-  // Convert traineddata to a data URI via FileReader.
-  // Data URIs have no origin restrictions and can be fetched from any JS context
-  // (blob: URLs from blob:file:// workers fail silently on Android WebView).
+  // Encode traineddata as a data URI — universally accessible from any JS context.
   const langDataUri = await arrayBufferToDataUri(langBuffer, 'application/octet-stream');
 
-  // Prepend a tiny patch that redirects traineddata fetch/XHR to the data URI.
-  const patchCode = `(function(){
-  var LANG_URI=${JSON.stringify(langDataUri)};
+  // Build the patch block:
+  //   1. Skip importScripts for the core (already inlined above in the blob).
+  //   2. Redirect eng.traineddata fetch/XHR to the inline data URI.
+  const patch = `(function(){
+  var _ois=self.importScripts;
+  self.importScripts=function(){
+    var ok=[];
+    for(var i=0;i<arguments.length;i++){
+      if(typeof arguments[i]==='string'&&arguments[i].indexOf('tesseract-core')!==-1)continue;
+      ok.push(arguments[i]);
+    }
+    if(ok.length)_ois.apply(self,ok);
+  };
+  var LANG=${JSON.stringify(langDataUri)};
   var _f=self.fetch.bind(self);
   self.fetch=function(u,o){
-    if(typeof u==='string'&&u.indexOf('eng.traineddata')!==-1)return _f(LANG_URI,o);
+    if(typeof u==='string'&&u.indexOf('eng.traineddata')!==-1)return _f(LANG,o);
     return _f(u,o);
   };
   var _xo=XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open=function(m,u){
     var a=[].slice.call(arguments);
-    if(typeof u==='string'&&u.indexOf('eng.traineddata')!==-1)a[1]=LANG_URI;
+    if(typeof u==='string'&&u.indexOf('eng.traineddata')!==-1)a[1]=LANG;
     return _xo.apply(this,a);
   };
 })();\n`;
 
+  // Worker blob = inlined core (3.8 MB) + patch + worker.min.js (109 KB).
+  // Total ~9 MB; self-contained, no network requests from worker context.
   const workerBlobUrl = URL.createObjectURL(
-    new Blob([patchCode + workerText], { type: 'application/javascript' })
+    new Blob([coreText, '\n', patch, workerText], { type: 'application/javascript' })
   );
 
-  // corePath ends in ".js" → Tesseract skips SIMD detection and loads this file
-  // directly via importScripts, which works from blob:file:// workers.
+  // corePath ends in ".js" → Tesseract skips SIMD detection and calls
+  // importScripts(corePath). Our importScripts patch skips it because
+  // TesseractCore is already defined by the inlined coreText above.
   const worker = await createWorker('eng', 1, {
     workerPath:  workerBlobUrl,
     corePath:    tesseractBase + 'tesseract-core-lstm.wasm.js',
