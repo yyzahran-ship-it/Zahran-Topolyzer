@@ -66,42 +66,37 @@ function parseNum(raw: string): number | null {
   return isNaN(n) ? null : n;
 }
 
-// Preprocess: upscale → grayscale only.
-// We intentionally skip external binarization: Tesseract performs its own internal
-// binarization which works better on photos of printed reports. Global Otsu on a
-// photo with colourful maps produces a broken threshold that destroys text pixels.
+// Upscale image to ~2000px max side for better OCR detail.
+// Colors are preserved — Tesseract's internal preprocessing works better
+// on color/grayscale than on our externally-binarized version.
 async function preprocessForOCR(dataUrl: string): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       const W = img.naturalWidth  || img.width  || 1;
       const H = img.naturalHeight || img.height || 1;
-      // Scale so the longer side is ~2000 px — more detail for Tesseract
       const scale = Math.min(3, Math.max(1, 2000 / Math.max(W, H)));
-      const cw = Math.round(W * scale);
-      const ch = Math.round(H * scale);
-      const n  = cw * ch;
-
+      if (scale <= 1.05) { resolve(dataUrl); return; } // already large enough
       const canvas = document.createElement('canvas');
-      canvas.width  = cw;
-      canvas.height = ch;
-      const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0, cw, ch);
-      const id = ctx.getImageData(0, 0, cw, ch);
-      const d  = id.data;
-
-      // Grayscale only — leave binarization to Tesseract's internal algorithm
-      for (let i = 0; i < n; i++) {
-        const j = i * 4;
-        const g = Math.round(0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2]);
-        d[j] = d[j + 1] = d[j + 2] = g;
-      }
-
-      ctx.putImageData(id, 0, 0);
-      resolve(canvas.toDataURL('image/png'));
+      canvas.width  = Math.round(W * scale);
+      canvas.height = Math.round(H * scale);
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.92));
     };
     img.onerror = () => resolve(dataUrl);
     img.src = dataUrl;
+  });
+}
+
+// Encode an ArrayBuffer as a data: URI using the browser's native FileReader.
+// Data URIs have no origin restrictions and can be fetched from any JS context
+// (unlike blob: URLs whose accessibility from blob:file:// workers is unreliable).
+function arrayBufferToDataUri(buf: ArrayBuffer, mime: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload  = () => resolve(fr.result as string);
+    fr.onerror = () => reject(new Error('FileReader failed'));
+    fr.readAsDataURL(new Blob([buf], { type: mime }));
   });
 }
 
@@ -130,22 +125,23 @@ export async function analyzeWithOCR(
 
   onProgress('Preparing OCR engine…');
 
-  const langBlobUrl = URL.createObjectURL(
-    new Blob([langBuffer], { type: 'application/octet-stream' })
-  );
+  // Convert traineddata to a data URI via FileReader.
+  // Data URIs have no origin restrictions and can be fetched from any JS context
+  // (blob: URLs from blob:file:// workers fail silently on Android WebView).
+  const langDataUri = await arrayBufferToDataUri(langBuffer, 'application/octet-stream');
 
-  // Prepend a tiny patch that redirects traineddata fetch/XHR to the blob URL.
-  // The blob is same-origin (blob:file://) so the worker can access it.
+  // Prepend a tiny patch that redirects traineddata fetch/XHR to the data URI.
   const patchCode = `(function(){
+  var LANG_URI=${JSON.stringify(langDataUri)};
   var _f=self.fetch.bind(self);
   self.fetch=function(u,o){
-    if(typeof u==='string'&&u.indexOf('eng.traineddata')!==-1)return _f(${JSON.stringify(langBlobUrl)},o);
+    if(typeof u==='string'&&u.indexOf('eng.traineddata')!==-1)return _f(LANG_URI,o);
     return _f(u,o);
   };
   var _xo=XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open=function(m,u){
     var a=[].slice.call(arguments);
-    if(typeof u==='string'&&u.indexOf('eng.traineddata')!==-1)a[1]=${JSON.stringify(langBlobUrl)};
+    if(typeof u==='string'&&u.indexOf('eng.traineddata')!==-1)a[1]=LANG_URI;
     return _xo.apply(this,a);
   };
 })();\n`;
@@ -202,7 +198,6 @@ export async function analyzeWithOCR(
   } finally {
     await worker.terminate();
     URL.revokeObjectURL(workerBlobUrl);
-    URL.revokeObjectURL(langBlobUrl);
   }
 
   onProgress('Parsing parameters…');
