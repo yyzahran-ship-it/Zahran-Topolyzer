@@ -17,7 +17,7 @@
 .end method
 
 .method protected onCreate(Landroid/os/Bundle;)V
-    .registers 7
+    .registers 14
     .param p1, "savedInstanceState"
 
     invoke-super {p0, p1}, Landroid/app/Activity;->onCreate(Landroid/os/Bundle;)V
@@ -42,7 +42,7 @@
     # DOM storage
     invoke-virtual {v1, v2}, Landroid/webkit/WebSettings;->setDomStorageEnabled(Z)V
 
-    # File access — lets file:// page load assets from the same file:// origin
+    # File access
     invoke-virtual {v1, v2}, Landroid/webkit/WebSettings;->setAllowFileAccess(Z)V
     invoke-virtual {v1, v2}, Landroid/webkit/WebSettings;->setAllowUniversalAccessFromFileURLs(Z)V
     invoke-virtual {v1, v2}, Landroid/webkit/WebSettings;->setAllowFileAccessFromFileURLs(Z)V
@@ -81,14 +81,69 @@
     invoke-direct {v4, p0}, Lcom/zahrantopolyzer/AppWebChromeClient;-><init>(Lcom/zahrantopolyzer/MainActivity;)V
     invoke-virtual {v0, v4}, Landroid/webkit/WebView;->setWebChromeClient(Landroid/webkit/WebChromeClient;)V
 
-    # ------- Load app from APK assets via file:// -------
-    # No http:// involved → no cleartext restriction.
-    # The JS pre-fetches worker.min.js in the main thread and creates a Blob URL
-    # so that new Worker() succeeds without needing an http:// origin.
-    const-string v5, "file:///android_asset/www/index.html"
-    invoke-virtual {v0, v5}, Landroid/webkit/WebView;->loadUrl(Ljava/lang/String;)V
+    # ------- Read www/index.html from assets into a String -------
+    # Using loadDataWithBaseURL("http://localhost/", html, "text/html", "UTF-8", null)
+    # gives the page http://localhost/ origin so Web Workers become
+    # blob:http://localhost/ and can freely fetch http://localhost/tesseract/*
+    # via shouldInterceptRequest — no cleartext network connection is made.
+
+    invoke-virtual {p0}, Landroid/content/Context;->getAssets()Landroid/content/res/AssetManager;
+    move-result-object v5
+
+    :try_start_read
+    const-string v6, "www/index.html"
+    invoke-virtual {v5, v6}, Landroid/content/res/AssetManager;->open(Ljava/lang/String;)Ljava/io/InputStream;
+    move-result-object v6
+
+    new-instance v7, Ljava/io/InputStreamReader;
+    invoke-direct {v7, v6}, Ljava/io/InputStreamReader;-><init>(Ljava/io/InputStream;)V
+
+    new-instance v8, Ljava/io/BufferedReader;
+    invoke-direct {v8, v7}, Ljava/io/BufferedReader;-><init>(Ljava/io/Reader;)V
+
+    new-instance v9, Ljava/lang/StringBuilder;
+    invoke-direct {v9}, Ljava/lang/StringBuilder;-><init>()V
+
+    const-string v11, "\n"
+
+    :read_loop
+    invoke-virtual {v8}, Ljava/io/BufferedReader;->readLine()Ljava/lang/String;
+    move-result-object v10
+    if-eqz v10, :read_done
+    invoke-virtual {v9, v10}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    invoke-virtual {v9, v11}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+    goto :read_loop
+
+    :read_done
+    invoke-virtual {v8}, Ljava/io/BufferedReader;->close()V
+    :try_end_read
+    .catch Ljava/io/IOException; {:try_start_read .. :try_end_read} :read_error
+
+    # Build args for loadDataWithBaseURL in v0..v5 (contiguous for invoke-virtual/range)
+    # v0 = WebView (object)
+    # v1 = baseUrl
+    # v2 = html data
+    # v3 = mimeType
+    # v4 = encoding
+    # v5 = historyUrl (null)
+    const-string v1, "http://localhost/"
+    invoke-virtual {v9}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+    move-result-object v2
+    const-string v3, "text/html"
+    const-string v4, "UTF-8"
+    const/4 v5, 0x0
+
+    invoke-virtual/range {v0 .. v5}, Landroid/webkit/WebView;->loadDataWithBaseURL(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 
     return-void
+
+    :read_error
+    move-exception v1
+    # Fallback: load from file:// URL
+    const-string v1, "file:///android_asset/www/index.html"
+    invoke-virtual {v0, v1}, Landroid/webkit/WebView;->loadUrl(Ljava/lang/String;)V
+    return-void
+
 .end method
 
 # Receives result from the image picker Activity

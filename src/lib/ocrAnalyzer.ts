@@ -88,83 +88,19 @@ async function preprocessForOCR(dataUrl: string): Promise<string> {
   });
 }
 
-// Encode an ArrayBuffer as a data: URI using the browser's native FileReader.
-// Data URIs have no origin restrictions and can be fetched from any JS context
-// (unlike blob: URLs whose accessibility from blob:file:// workers is unreliable).
-function arrayBufferToDataUri(buf: ArrayBuffer, mime: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload  = () => resolve(fr.result as string);
-    fr.onerror = () => reject(new Error('FileReader failed'));
-    fr.readAsDataURL(new Blob([buf], { type: mime }));
-  });
-}
-
 export async function analyzeWithOCR(
   imageDataUrl: string,
   onProgress: (msg: string) => void
 ): Promise<AnalysisResult> {
-  // Strategy: pre-fetch ALL assets in the main thread (shouldInterceptRequest
-  // is 100% reliable there). Then build a self-contained worker blob that needs
-  // zero network requests from the worker context, eliminating every blob://,
-  // importScripts, and fetch reliability issue on Android WebView file:// origins.
-  //
-  //  • coreText   — inlined at the top of the blob → TesseractCore defined
-  //  • importScripts patch — prevents the already-loaded core from reloading
-  //  • fetch/XHR patch — redirects traineddata to an inline base64 data URI
-  //  • workerText — Tesseract.js worker script (sees everything it needs)
+  // Page origin is http://localhost/ (set via loadDataWithBaseURL in MainActivity).
+  // Workers are therefore blob:http://localhost/ and can freely fetch
+  // http://localhost/tesseract/* — all served by shouldInterceptRequest from APK assets.
   const tesseractBase = 'http://localhost/tesseract/';
 
-  onProgress('Downloading OCR assets…');
-  const [workerText, coreText, langBuffer] = await Promise.all([
-    fetch(tesseractBase + 'worker.min.js').then((r) => r.text()),
-    fetch(tesseractBase + 'tesseract-core-lstm.wasm.js').then((r) => r.text()),
-    fetch(tesseractBase + 'eng.traineddata').then((r) => r.arrayBuffer()),
-  ]);
+  onProgress('Loading OCR model…');
 
-  onProgress('Preparing OCR engine…');
-
-  // Encode traineddata as a data URI — universally accessible from any JS context.
-  const langDataUri = await arrayBufferToDataUri(langBuffer, 'application/octet-stream');
-
-  // Build the patch block:
-  //   1. Skip importScripts for the core (already inlined above in the blob).
-  //   2. Redirect eng.traineddata fetch/XHR to the inline data URI.
-  const patch = `(function(){
-  var _ois=self.importScripts;
-  self.importScripts=function(){
-    var ok=[];
-    for(var i=0;i<arguments.length;i++){
-      if(typeof arguments[i]==='string'&&arguments[i].indexOf('tesseract-core')!==-1)continue;
-      ok.push(arguments[i]);
-    }
-    if(ok.length)_ois.apply(self,ok);
-  };
-  var LANG=${JSON.stringify(langDataUri)};
-  var _f=self.fetch.bind(self);
-  self.fetch=function(u,o){
-    if(typeof u==='string'&&u.indexOf('eng.traineddata')!==-1)return _f(LANG,o);
-    return _f(u,o);
-  };
-  var _xo=XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open=function(m,u){
-    var a=[].slice.call(arguments);
-    if(typeof u==='string'&&u.indexOf('eng.traineddata')!==-1)a[1]=LANG;
-    return _xo.apply(this,a);
-  };
-})();\n`;
-
-  // Worker blob = inlined core (3.8 MB) + patch + worker.min.js (109 KB).
-  // Total ~9 MB; self-contained, no network requests from worker context.
-  const workerBlobUrl = URL.createObjectURL(
-    new Blob([coreText, '\n', patch, workerText], { type: 'application/javascript' })
-  );
-
-  // corePath ends in ".js" → Tesseract skips SIMD detection and calls
-  // importScripts(corePath). Our importScripts patch skips it because
-  // TesseractCore is already defined by the inlined coreText above.
   const worker = await createWorker('eng', 1, {
-    workerPath:  workerBlobUrl,
+    workerPath:  tesseractBase + 'worker.min.js',
     corePath:    tesseractBase + 'tesseract-core-lstm.wasm.js',
     langPath:    tesseractBase,
     cacheMethod: 'none' as const,
@@ -208,7 +144,6 @@ export async function analyzeWithOCR(
     }
   } finally {
     await worker.terminate();
-    URL.revokeObjectURL(workerBlobUrl);
   }
 
   onProgress('Parsing parameters…');
