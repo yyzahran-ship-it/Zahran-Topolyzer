@@ -304,9 +304,11 @@ export async function analyzeWithOCR(
 
   const found = new Map<string, { value: number; unit: string; x: number; y: number; w: number; h: number }>();
 
-  // Record a found parameter. Bbox is always anchored at the label word to
-  // avoid misplacement when Tesseract gives the value word an incorrect bbox
-  // (common when values are on lines adjacent to dense text like warning triangles).
+  // Record a found parameter. For x we always anchor at the label word's left edge.
+  // For y, Tesseract (especially PSM-11) sometimes places a word's bbox one row below
+  // its actual position. When label and value are NOT on the same row according to OCR,
+  // exactly one of them has drifted downward. We pick the word with the smaller y-center
+  // (higher up on screen) as the y-anchor, because OCR drift is always downward.
   function recordHit(pat: { name: string; unit: string }, labelWord: Word, numWord: Word) {
     if (found.has(pat.name)) return;
     const value = parseNum(numWord.text);
@@ -318,12 +320,21 @@ export async function analyzeWithOCR(
     const nCy = (numWord.bbox.y0 + numWord.bbox.y1) / 2;
     const sameRow = Math.abs(lCy - nCy) < imgHeight * 0.028;
 
-    // Always start from the label word's left edge so the box is anchored at
-    // the parameter name — even if the value word's OCR bbox is on the wrong row.
+    // x always comes from the label's left edge (horizontal anchor)
     const x0 = labelWord.bbox.x0;
-    const y0 = labelWord.bbox.y0;
     const x1 = sameRow ? Math.max(labelWord.bbox.x1, numWord.bbox.x1) : labelWord.bbox.x1;
-    const y1 = sameRow ? Math.max(labelWord.bbox.y1, numWord.bbox.y1) : labelWord.bbox.y1;
+
+    // y: if same row, span both words' heights (tight box).
+    // If different rows, one word is OCR-drifted downward — use whichever is higher (smaller cy).
+    let y0: number, y1: number;
+    if (sameRow) {
+      y0 = Math.min(labelWord.bbox.y0, numWord.bbox.y0);
+      y1 = Math.max(labelWord.bbox.y1, numWord.bbox.y1);
+    } else {
+      const anchor = lCy <= nCy ? labelWord : numWord;
+      y0 = anchor.bbox.y0;
+      y1 = anchor.bbox.y1;
+    }
 
     found.set(pat.name, {
       value, unit: pat.unit,
