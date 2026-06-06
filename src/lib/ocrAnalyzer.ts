@@ -62,13 +62,25 @@ export async function analyzeWithOCR(
 ): Promise<AnalysisResult> {
   onProgress('Loading OCR engine…');
 
-  // Use http://localhost/ paths — served by our WebViewClient asset interceptor.
-  // This is required because Web Workers cannot be created from file:// URLs on Android.
-  const base = window.location.origin + '/';
+  // Derive asset base URL from current page URL.
+  // When loaded from file:///android_asset/www/index.html this gives
+  // file:///android_asset/www/ — no http:// involved, so no cleartext block.
+  const href = window.location.href;
+  const base = href.substring(0, href.lastIndexOf('/') + 1);
+
+  // Pre-fetch the worker script and WASM core in the main thread (where file://
+  // access is allowed), then wrap them as Blob URLs.  This avoids the Android
+  // WebView restriction that crashes/blocks new Worker("file://…").
+  const [workerBlob, coreBlob] = await Promise.all([
+    fetch(base + 'tesseract/worker.min.js').then((r) => r.blob()),
+    fetch(base + 'tesseract/tesseract-core.wasm.js').then((r) => r.blob()),
+  ]);
+  const workerBlobUrl = URL.createObjectURL(workerBlob);
+  const coreBlobUrl   = URL.createObjectURL(coreBlob);
 
   const worker = await createWorker('eng', 1, {
-    workerPath:  base + 'tesseract/worker.min.js',
-    corePath:    base + 'tesseract/tesseract-core.wasm.js',
+    workerPath:  workerBlobUrl,
+    corePath:    coreBlobUrl,
     langPath:    base + 'tesseract/',
     cacheMethod: 'none' as const,
     logger: (m: { status: string; progress: number }) => {
@@ -97,6 +109,8 @@ export async function analyzeWithOCR(
     }
   } finally {
     await worker.terminate();
+    URL.revokeObjectURL(workerBlobUrl);
+    URL.revokeObjectURL(coreBlobUrl);
   }
 
   onProgress('Parsing parameters…');
