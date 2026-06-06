@@ -168,33 +168,80 @@ export async function analyzeWithOCR(
 ): Promise<AnalysisResult> {
   onProgress('Loading OCR engine…');
 
-  // The page loads from file:///android_asset/ (no cleartext issue for navigation).
-  // But JavaScript's fetch() cannot access file:///android_asset/ URLs — Android
-  // explicitly excludes them from shouldInterceptRequest and from the JS fetch API.
+  // All Tesseract assets are fetched in the MAIN THREAD via http://localhost/,
+  // which goes through AppWebViewClient.shouldInterceptRequest (served from APK
+  // assets, no real network request, cleartext restriction never fires).
   //
-  // Solution: fetch Tesseract assets via http://localhost/ instead.
-  // These requests go through AppWebViewClient.shouldInterceptRequest, which serves
-  // them from APK assets WITHOUT making any real network connection — so the Android
-  // cleartext-traffic restriction never fires (it only applies to actual network I/O).
+  // Fetching inside a blob:file:// worker is unreliable on Android WebView —
+  // importScripts works for the core, but fetch() for traineddata can hang.
+  // Solution: pre-fetch everything in the main thread, then:
+  //   1. Inline the WASM core JS at the top of the worker blob (no importScripts needed)
+  //   2. Create a blob URL for traineddata and patch self.fetch inside the worker
+  //      so traineddata requests are redirected to the pre-fetched blob URL.
   const tesseractBase = 'http://localhost/tesseract/';
 
-  const workerBlob = await fetch(tesseractBase + 'worker.min.js').then((r) => r.blob());
-  const workerBlobUrl = URL.createObjectURL(workerBlob);
+  onProgress('Downloading OCR engine…');
+  const [workerText, coreText, langBuffer] = await Promise.all([
+    fetch(tesseractBase + 'worker.min.js').then((r) => r.text()),
+    fetch(tesseractBase + 'tesseract-core-lstm.wasm.js').then((r) => r.text()),
+    fetch(tesseractBase + 'eng.traineddata').then((r) => r.arrayBuffer()),
+  ]);
 
-  // corePath must end in ".js" so Tesseract skips SIMD detection and uses this file directly.
-  // tesseract-core-lstm.wasm.js is the LSTM model without SIMD — works on all Android 7+ devices.
-  const corePath = tesseractBase + 'tesseract-core-lstm.wasm.js';
+  onProgress('Preparing OCR engine…');
 
+  // Create a blob URL for the traineddata so the patched worker fetch can access it.
+  const langBlobUrl = URL.createObjectURL(
+    new Blob([langBuffer], { type: 'application/octet-stream' })
+  );
+
+  // Build a self-contained worker script:
+  //   - core WASM JS is prepended (avoids importScripts call)
+  //   - self.fetch is patched to redirect eng.traineddata to the blob URL
+  const patchedWorker = [
+    coreText,
+    // Redirect any fetch for eng.traineddata to the pre-loaded blob URL.
+    // The blob URL is same-origin (blob:file://) so the worker can fetch it.
+    `(function(){
+  var _origFetch = self.fetch.bind(self);
+  self.fetch = function(url, opts) {
+    if (typeof url === 'string' && url.indexOf('eng.traineddata') !== -1) {
+      return _origFetch(${JSON.stringify(langBlobUrl)}, opts);
+    }
+    return _origFetch(url, opts);
+  };
+  var _origXHROpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url) {
+    var args = Array.prototype.slice.call(arguments);
+    if (typeof url === 'string' && url.indexOf('eng.traineddata') !== -1) {
+      args[1] = ${JSON.stringify(langBlobUrl)};
+    }
+    return _origXHROpen.apply(this, args);
+  };
+})();`,
+    workerText,
+  ].join('\n');
+
+  const workerBlobUrl = URL.createObjectURL(
+    new Blob([patchedWorker], { type: 'application/javascript' })
+  );
+
+  // corePath must end in ".js" so Tesseract skips SIMD feature detection
+  // and uses the file directly. Since the core is already inlined in the
+  // worker blob, any URL works here — it won't be fetched again.
   const worker = await createWorker('eng', 1, {
     workerPath:  workerBlobUrl,
-    corePath,
+    corePath:    tesseractBase + 'tesseract-core-lstm.wasm.js',
     langPath:    tesseractBase,
     cacheMethod: 'none' as const,
     logger: (m: { status: string; progress: number }) => {
       if (m.status === 'recognizing text') {
         onProgress(`Scanning image… ${Math.round(m.progress * 100)}%`);
+      } else if (m.status === 'loading tesseract core') {
+        onProgress('Loading OCR engine…');
       } else if (m.status === 'loading language traineddata') {
-        onProgress('Loading OCR model…');
+        onProgress('Loading OCR language data…');
+      } else if (m.status === 'initializing tesseract') {
+        onProgress('Initializing OCR…');
       }
     },
   });
@@ -227,6 +274,7 @@ export async function analyzeWithOCR(
   } finally {
     await worker.terminate();
     URL.revokeObjectURL(workerBlobUrl);
+    URL.revokeObjectURL(langBlobUrl);
   }
 
   onProgress('Parsing parameters…');
