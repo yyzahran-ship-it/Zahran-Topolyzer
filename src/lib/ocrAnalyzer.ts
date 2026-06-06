@@ -218,10 +218,11 @@ export async function analyzeWithOCR(
     },
   });
 
-  // PSM 11 = Sparse text — best for scattered labels/numbers on medical reports
+  // PSM 3 = Fully automatic page segmentation — gives reliable line bboxes so every word
+  // in a visual row shares the same y-coordinates, preventing per-word y-drift.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await (worker as any).setParameters({
-    tessedit_pageseg_mode: '11',
+    tessedit_pageseg_mode: '3',
     preserve_interword_spaces: '1',
   });
 
@@ -248,10 +249,22 @@ export async function analyzeWithOCR(
     for (const block of (page.blocks ?? [])) {
       for (const para of (block.paragraphs ?? [])) {
         for (const line of (para.lines ?? [])) {
+          // Use the Tesseract LINE's bbox for y-coordinates rather than individual word bboxes.
+          // With PSM-3, line segmentation is reliable: all words on the same visual row share
+          // the same line bbox, eliminating per-word y-drift that caused boxes to land on
+          // the wrong row.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const lel = line as any;
+          const lineY0: number | undefined = lel.bbox?.y0;
+          const lineY1: number | undefined = lel.bbox?.y1;
           for (const word of (line.words ?? [])) {
             const w = word as Word;
-            // Skip low-confidence words — they cause false label/value matches
-            if (w.confidence >= MIN_CONFIDENCE) words.push(w);
+            if (w.confidence >= MIN_CONFIDENCE) {
+              words.push(lineY0 !== undefined && lineY1 !== undefined ? {
+                ...w,
+                bbox: { x0: w.bbox.x0, y0: lineY0, x1: w.bbox.x1, y1: lineY1 },
+              } : w);
+            }
           }
         }
       }
@@ -304,11 +317,12 @@ export async function analyzeWithOCR(
 
   const found = new Map<string, { value: number; unit: string; x: number; y: number; w: number; h: number }>();
 
-  // Record a found parameter. For x we always anchor at the label word's left edge.
-  // For y, Tesseract (especially PSM-11) sometimes places a word's bbox one row below
-  // its actual position. When label and value are NOT on the same row according to OCR,
-  // exactly one of them has drifted downward. We pick the word with the smaller y-center
-  // (higher up on screen) as the y-anchor, because OCR drift is always downward.
+  // Record a found parameter.
+  // x always anchors at the label's left edge.
+  // y: with PSM-3 + line-bbox override, all words on the same visual row share the same
+  //    y-coordinates (sameRow=true). When spatial search finds a value on a different row
+  //    (sameRow=false — e.g. "Thinnest location" header → "481" below), the value word
+  //    IS on the correct data row so we use its y.
   function recordHit(pat: { name: string; unit: string }, labelWord: Word, numWord: Word) {
     if (found.has(pat.name)) return;
     const value = parseNum(numWord.text);
@@ -320,21 +334,14 @@ export async function analyzeWithOCR(
     const nCy = (numWord.bbox.y0 + numWord.bbox.y1) / 2;
     const sameRow = Math.abs(lCy - nCy) < imgHeight * 0.028;
 
-    // x always comes from the label's left edge (horizontal anchor)
     const x0 = labelWord.bbox.x0;
     const x1 = sameRow ? Math.max(labelWord.bbox.x1, numWord.bbox.x1) : labelWord.bbox.x1;
 
-    // y: if same row, span both words' heights (tight box).
-    // If different rows, one word is OCR-drifted downward — use whichever is higher (smaller cy).
-    let y0: number, y1: number;
-    if (sameRow) {
-      y0 = Math.min(labelWord.bbox.y0, numWord.bbox.y0);
-      y1 = Math.max(labelWord.bbox.y1, numWord.bbox.y1);
-    } else {
-      const anchor = lCy <= nCy ? labelWord : numWord;
-      y0 = anchor.bbox.y0;
-      y1 = anchor.bbox.y1;
-    }
+    // Same row → use label's line y (both share it; also covers Pass 0 exact-line matches).
+    // Different rows → use value's line y (the value IS on the correct data row).
+    const yWord = sameRow ? labelWord : numWord;
+    const y0 = yWord.bbox.y0;
+    const y1 = yWord.bbox.y1;
 
     found.set(pat.name, {
       value, unit: pat.unit,
