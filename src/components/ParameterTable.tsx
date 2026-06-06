@@ -3,7 +3,7 @@ import type { TopographyParameter, ParameterStatus } from '../types/topography';
 
 interface Props {
   parameters: TopographyParameter[];
-  onHover: (name: string | null) => void;
+  onHover?: (name: string | null) => void;
 }
 
 const STATUS_CONFIG: Record<ParameterStatus, { label: string; chip: string; row: string }> = {
@@ -99,8 +99,8 @@ export function ParameterTable({ parameters, onHover }: Props) {
                 <tr
                   key={`${p.name}-${p.value}`}
                   className={`transition-colors cursor-default ${cfg.row}`}
-                  onMouseEnter={() => onHover(p.name)}
-                  onMouseLeave={() => onHover(null)}
+                  onMouseEnter={() => onHover?.(p.name)}
+                  onMouseLeave={() => onHover?.(null)}
                   title={p.interpretation}
                 >
                   <td className="px-4 py-2.5">
