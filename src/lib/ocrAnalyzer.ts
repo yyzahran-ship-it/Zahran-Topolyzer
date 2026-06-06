@@ -17,6 +17,13 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /thinn?e?s?t?\s*(p?o?i?n?t?|loc\w*)|\bthk\b|min\.?\s*pachy/i, name: 'Thinnest Point', unit: 'µm' },
   { regex: /ant\.?\s*el?ev|front\s*el?ev/i,                       name: 'Anterior Elevation',  unit: 'µm'  },
   { regex: /post\.?\s*el?ev|back\s*el?ev/i,                       name: 'Posterior Elevation', unit: 'µm'  },
+  // Sirius KC elevation indices — KVf/KVb appear in the KC Indices panel as "KVf = X µm"
+  // KVb is the most sensitive Sirius KC indicator (atlas: normal < 8 µm)
+  { regex: /\bkv\s*f\b/i,                                         name: 'KVf',                 unit: 'µm'  },
+  { regex: /\bkv\s*b\b/i,                                         name: 'KVb',                 unit: 'µm'  },
+  // Sirius BCV indices — "BCVf = X D @ Y°" in Keratoconus screening panel
+  { regex: /\bbcv\s*f\b/i,                                        name: 'BCVf',                unit: 'D'   },
+  { regex: /\bbcv\s*b\b/i,                                        name: 'BCVb',                unit: 'D'   },
   { regex: /b\.?\s*a\.?\s*d\.?\s*-?\s*d\b|bad\s*d/i,             name: 'BAD-D',               unit: ''    },
   { regex: /\bt\.?\s*b\.?\s*i\b/i,                                name: 'TBI',                 unit: ''    },
   { regex: /\bc\.?\s*b\.?\s*i\b/i,                                name: 'CBI',                 unit: ''    },
@@ -77,9 +84,11 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'CCT': [200, 850], 'Thinnest Point': [200, 850], 'Pachymetry Min': [200, 850],
   'Anterior Elevation': [-500, 500], 'Posterior Elevation': [-500, 500],
   'BAD-D': [0, 30], 'TBI': [0, 1.05], 'CBI': [0, 1.05],
+  'KVf': [0, 200], 'KVb': [0, 200],
+  'BCVf': [0, 15], 'BCVb': [0, 15],
   'ISV': [0, 300], 'IVA': [0, 3], 'KI': [0.5, 2.5], 'CKI': [0, 2],
   'IHA': [0, 360], 'IHD': [0, 0.5], 'Rmin': [3, 10], 'ART-Max': [0, 600],
-  'SIf': [-10, 10], 'SIb': [-10, 10], 'DSI': [-10, 300], 'OSI': [0, 300],
+  'SIf': [0, 10], 'SIb': [0, 10], 'DSI': [-10, 300], 'OSI': [0, 300],
   'CSI': [0, 300], 'IAI': [0, 300], 'AAI': [0, 300],
   'PPI-Avg': [0, 5], 'PPI-Min': [0, 5], 'PRFI': [0, 30],
   'KISA%': [0, 2000], 'SRAX': [0, 360], 'SAI': [0, 10], 'SRI': [0, 10],

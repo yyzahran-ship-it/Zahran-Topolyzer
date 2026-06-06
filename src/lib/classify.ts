@@ -69,6 +69,8 @@ export function computeRiskLevel(params: TopographyParameter[]): RiskLevel {
   const prfi     = find(['prfi']);
   const thinnest = find(['thinnest', 'min pachy']);
   const postEl   = find(['posterior elev', 'back elev']);
+  const kvb      = find(['kvb']);
+  const bcvb     = find(['bcvb']);
 
   if (badD?.status === 'abnormal' || tbi?.status === 'abnormal' || abnormal >= 4)
     return 'very-high';
@@ -79,6 +81,8 @@ export function computeRiskLevel(params: TopographyParameter[]): RiskLevel {
     prfi?.status === 'abnormal' ||
     postEl?.status === 'abnormal' ||
     thinnest?.status === 'abnormal' ||
+    kvb?.status === 'abnormal' ||
+    bcvb?.status === 'abnormal' ||
     abnormal >= 2
   ) return 'high';
 
