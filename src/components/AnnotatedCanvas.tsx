@@ -75,9 +75,9 @@ export function AnnotatedCanvas({ imageSrc, parameters, hoveredParam }: Props) {
         const textW = ctx.measureText(label).width + 8;
         const textH = fontSize + 6;
         ctx.fillStyle = colors.stroke;
-        ctx.fillRect(cx - bw / 2, cy - bh / 2 - textH - 2, textW, textH);
+        ctx.fillRect(cx + bw / 2 + 2, cy - textH / 2, textW, textH);
         ctx.fillStyle = '#ffffff';
-        ctx.fillText(label, cx - bw / 2 + 4, cy - bh / 2 - 6);
+        ctx.fillText(label, cx + bw / 2 + 6, cy + fontSize / 2 - 2);
       }
     };
     img.src = imageSrc;

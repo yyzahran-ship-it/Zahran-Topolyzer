@@ -3,52 +3,58 @@ import { buildResult } from './classify';
 import type { AnalysisResult } from '../types/topography';
 
 const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
-  { regex: /k\s*-?\s*max|kmax/i,                             name: 'Kmax',                unit: 'D'   },
-  { regex: /\bk\s*f\b|\bk\s*1\b|flat\s*k/i,                 name: 'K1',                  unit: 'D'   },
-  { regex: /\bk\s*s\b|\bk\s*2\b|steep\s*k/i,                name: 'K2',                  unit: 'D'   },
-  { regex: /\bk\s*m\b|mean\s*k|\bavg\b/i,                    name: 'Km',                  unit: 'D'   },
-  { regex: /sim\.?\s*k\s*1|simk1/i,                          name: 'SimK1',               unit: 'D'   },
-  { regex: /sim\.?\s*k\s*2|simk2/i,                          name: 'SimK2',               unit: 'D'   },
-  { regex: /\bc\.?\s*c\.?\s*t\b|central\s*corneal\s*thick/i, name: 'CCT',                 unit: 'µm'  },
-  { regex: /thinn?e?s?t?\s*p?o?i?n?t?|min\.?\s*pachy/i,      name: 'Thinnest Point',      unit: 'µm'  },
-  { regex: /ant\.?\s*el?ev|front\s*el?ev/i,                  name: 'Anterior Elevation',  unit: 'µm'  },
-  { regex: /post\.?\s*el?ev|back\s*el?ev/i,                  name: 'Posterior Elevation', unit: 'µm'  },
-  { regex: /b\.?\s*a\.?\s*d\.?\s*-?\s*d\b|bad\s*d/i,        name: 'BAD-D',               unit: ''    },
-  { regex: /\bt\.?\s*b\.?\s*i\b/i,                           name: 'TBI',                 unit: ''    },
-  { regex: /\bc\.?\s*b\.?\s*i\b/i,                           name: 'CBI',                 unit: ''    },
-  { regex: /\bi\.?\s*s\.?\s*v\b/i,                           name: 'ISV',                 unit: ''    },
-  { regex: /\bi\.?\s*v\.?\s*a\b/i,                           name: 'IVA',                 unit: ''    },
-  { regex: /\bk\.?\s*i\b(?!s)/i,                             name: 'KI',                  unit: ''    },
-  { regex: /\bc\.?\s*k\.?\s*i\b/i,                           name: 'CKI',                 unit: ''    },
-  { regex: /\bi\.?\s*h\.?\s*a\b/i,                           name: 'IHA',                 unit: '°'   },
-  { regex: /\bi\.?\s*h\.?\s*d\b/i,                           name: 'IHD',                 unit: ''    },
-  { regex: /\br\.?\s*m\.?\s*i\.?\s*n\b|r\s*min/i,           name: 'Rmin',                unit: 'mm'  },
-  { regex: /a\.?\s*r\.?\s*t\.?\s*-?\s*max|artmax/i,         name: 'ART-Max',             unit: ''    },
-  { regex: /\bp\.?\s*r\.?\s*f\.?\s*i\b/i,                   name: 'PRFI',                unit: ''    },
-  { regex: /i\s*[\/\-]\s*s\s*(val|value)?/i,                 name: 'I-S value',           unit: 'D'   },
-  { regex: /\bkisa\s*%?/i,                                   name: 'KISA%',               unit: '%'   },
-  { regex: /\bs\.?\s*r\.?\s*a\.?\s*x\b/i,                   name: 'SRAX',                unit: '°'   },
-  { regex: /\bs\.?\s*a\.?\s*i\b/i,                           name: 'SAI',                 unit: ''    },
-  { regex: /\bs\.?\s*r\.?\s*i\b/i,                           name: 'SRI',                 unit: ''    },
-  { regex: /\bw\.?\s*t\.?\s*w\b|white.to.white/i,           name: 'WTW',                 unit: 'mm'  },
-  { regex: /\ba\.?\s*c\.?\s*d\b/i,                           name: 'ACD',                 unit: 'mm'  },
-  { regex: /corneal\s*vol/i,                                  name: 'Corneal Volume',      unit: 'mm³' },
-  { regex: /q[.\s]?val|aspherici?ty/i,                       name: 'Q value',             unit: ''    },
-  { regex: /hoa\s*rms|total\s*hoa/i,                         name: 'HOA RMS',             unit: 'µm'  },
-  { regex: /\bs\.?\s*i\.?\s*f\b|si\s*-?\s*f\b/i,            name: 'SIf',                 unit: ''    },
-  { regex: /\bs\.?\s*i\.?\s*b\b|si\s*-?\s*b\b/i,            name: 'SIb',                 unit: ''    },
-  { regex: /\bd\.?\s*s\.?\s*i\b/i,                           name: 'DSI',                 unit: ''    },
-  { regex: /\bo\.?\s*s\.?\s*i\b/i,                           name: 'OSI',                 unit: ''    },
-  { regex: /\bc\.?\s*s\.?\s*i\b/i,                           name: 'CSI',                 unit: ''    },
-  { regex: /\bi\.?\s*a\.?\s*i\b/i,                           name: 'IAI',                 unit: ''    },
-  { regex: /\ba\.?\s*a\.?\s*i\b/i,                           name: 'AAI',                 unit: ''    },
-  { regex: /\bs\.?\s*d\.?\s*p\b/i,                           name: 'SDP',                 unit: ''    },
-  { regex: /astigmati?sm|\bcyl\b/i,                          name: 'Astigmatism',         unit: 'D'   },
-  { regex: /ppi\s*-?\s*avg/i,                                name: 'PPI-Avg',             unit: ''    },
-  { regex: /ppi\s*-?\s*min/i,                                name: 'PPI-Min',             unit: ''    },
-  { regex: /pachy\s*min|min\s*pachy/i,                       name: 'Pachymetry Min',      unit: 'µm'  },
-  { regex: /\bflat\b(?!\s*k)/i,                              name: 'Flat K',              unit: 'D'   },
-  { regex: /\bsteep\b(?!\s*k)/i,                             name: 'Steep K',             unit: 'D'   },
+  { regex: /k\s*-?\s*max|kmax/i,                                  name: 'Kmax',                unit: 'D'   },
+  // Sirius: "K1 = X D" in K readings, "rf = X D" in Shape indices (anterior flat K)
+  { regex: /\bk\s*f\b|\bk\s*1\b|flat\s*k|\brf\b/i,              name: 'K1',                  unit: 'D'   },
+  // Sirius: "K2 = X D" in K readings, "rs = X D" in Shape indices (anterior steep K)
+  { regex: /\bk\s*s\b|\bk\s*2\b|steep\s*k|\brs\b/i,             name: 'K2',                  unit: 'D'   },
+  // Removed \bavg\b — too broad, grabs wrong column from posterior K "Avg = -6.xx D"
+  { regex: /\bk\s*m\b|mean\s*k/i,                                 name: 'Km',                  unit: 'D'   },
+  { regex: /sim\.?\s*k\s*1|simk1/i,                               name: 'SimK1',               unit: 'D'   },
+  { regex: /sim\.?\s*k\s*2|simk2/i,                               name: 'SimK2',               unit: 'D'   },
+  { regex: /\bc\.?\s*c\.?\s*t\b|central\s*corneal\s*thick/i,      name: 'CCT',                 unit: 'µm'  },
+  // Sirius uses "Thk = X µm" on the same line as the thickness value
+  { regex: /thinn?e?s?t?\s*(p?o?i?n?t?|loc\w*)|\bthk\b|min\.?\s*pachy/i, name: 'Thinnest Point', unit: 'µm' },
+  { regex: /ant\.?\s*el?ev|front\s*el?ev/i,                       name: 'Anterior Elevation',  unit: 'µm'  },
+  { regex: /post\.?\s*el?ev|back\s*el?ev/i,                       name: 'Posterior Elevation', unit: 'µm'  },
+  { regex: /b\.?\s*a\.?\s*d\.?\s*-?\s*d\b|bad\s*d/i,             name: 'BAD-D',               unit: ''    },
+  { regex: /\bt\.?\s*b\.?\s*i\b/i,                                name: 'TBI',                 unit: ''    },
+  { regex: /\bc\.?\s*b\.?\s*i\b/i,                                name: 'CBI',                 unit: ''    },
+  { regex: /\bi\.?\s*s\.?\s*v\b/i,                                name: 'ISV',                 unit: ''    },
+  { regex: /\bi\.?\s*v\.?\s*a\b/i,                                name: 'IVA',                 unit: ''    },
+  { regex: /\bk\.?\s*i\b(?!s)/i,                                  name: 'KI',                  unit: ''    },
+  { regex: /\bc\.?\s*k\.?\s*i\b/i,                                name: 'CKI',                 unit: ''    },
+  { regex: /\bi\.?\s*h\.?\s*a\b/i,                                name: 'IHA',                 unit: '°'   },
+  { regex: /\bi\.?\s*h\.?\s*d\b/i,                                name: 'IHD',                 unit: ''    },
+  { regex: /\br\.?\s*m\.?\s*i\.?\s*n\b|r\s*min/i,                name: 'Rmin',                unit: 'mm'  },
+  { regex: /a\.?\s*r\.?\s*t\.?\s*-?\s*max|artmax/i,              name: 'ART-Max',             unit: ''    },
+  { regex: /\bp\.?\s*r\.?\s*f\.?\s*i\b/i,                        name: 'PRFI',                unit: ''    },
+  { regex: /i\s*[\/\-]\s*s\s*(val|value)?/i,                      name: 'I-S value',           unit: 'D'   },
+  { regex: /\bkisa\s*%?/i,                                        name: 'KISA%',               unit: '%'   },
+  { regex: /\bs\.?\s*r\.?\s*a\.?\s*x\b/i,                        name: 'SRAX',                unit: '°'   },
+  { regex: /\bs\.?\s*a\.?\s*i\b/i,                                name: 'SAI',                 unit: ''    },
+  { regex: /\bs\.?\s*r\.?\s*i\b/i,                                name: 'SRI',                 unit: ''    },
+  // Sirius: HVID = horizontal visible iris diameter (same as WTW)
+  { regex: /\bw\.?\s*t\.?\s*w\b|white.to.white|\bhvid\b/i,       name: 'WTW',                 unit: 'mm'  },
+  { regex: /\ba\.?\s*c\.?\s*d\b/i,                                name: 'ACD',                 unit: 'mm'  },
+  { regex: /corneal\s*vol/i,                                       name: 'Corneal Volume',      unit: 'mm³' },
+  { regex: /q[.\s]?val|aspherici?ty|\bq\s*=/i,                    name: 'Q value',             unit: ''    },
+  { regex: /hoa\s*rms|total\s*hoa/i,                              name: 'HOA RMS',             unit: 'µm'  },
+  { regex: /\bs\.?\s*i\.?\s*f\b|si\s*-?\s*f\b/i,                 name: 'SIf',                 unit: 'D'   },
+  { regex: /\bs\.?\s*i\.?\s*b\b|si\s*-?\s*b\b/i,                 name: 'SIb',                 unit: 'D'   },
+  { regex: /\bd\.?\s*s\.?\s*i\b/i,                                name: 'DSI',                 unit: ''    },
+  { regex: /\bo\.?\s*s\.?\s*i\b/i,                                name: 'OSI',                 unit: ''    },
+  { regex: /\bc\.?\s*s\.?\s*i\b/i,                                name: 'CSI',                 unit: ''    },
+  { regex: /\bi\.?\s*a\.?\s*i\b/i,                                name: 'IAI',                 unit: ''    },
+  { regex: /\ba\.?\s*a\.?\s*i\b/i,                                name: 'AAI',                 unit: ''    },
+  { regex: /\bs\.?\s*d\.?\s*p\b/i,                                name: 'SDP',                 unit: ''    },
+  { regex: /astigmati?sm|\bcyl\b/i,                               name: 'Astigmatism',         unit: 'D'   },
+  { regex: /ppi\s*-?\s*avg/i,                                     name: 'PPI-Avg',             unit: ''    },
+  { regex: /ppi\s*-?\s*min/i,                                     name: 'PPI-Min',             unit: ''    },
+  { regex: /pachy\s*min|min\s*pachy/i,                            name: 'Pachymetry Min',      unit: 'µm'  },
+  { regex: /\bflat\b(?!\s*k)/i,                                   name: 'Flat K',              unit: 'D'   },
+  { regex: /\bsteep\b(?!\s*k)/i,                                  name: 'Steep K',             unit: 'D'   },
+  { regex: /\blsa\b/i,                                            name: 'LSA',                 unit: 'D'   },
 ];
 
 interface Word {
@@ -79,7 +85,7 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'KISA%': [0, 2000], 'SRAX': [0, 360], 'SAI': [0, 10], 'SRI': [0, 10],
   'WTW': [8, 16], 'ACD': [1, 6], 'Corneal Volume': [20, 130],
   'Astigmatism': [-15, 15], 'Q value': [-3, 1], 'HOA RMS': [0, 10],
-  'I-S value': [-20, 20],
+  'I-S value': [-20, 20], 'LSA': [0, 10],
 };
 
 // Extract numeric value from OCR'd text — tolerates units attached to digits
@@ -298,8 +304,9 @@ export async function analyzeWithOCR(
 
   const found = new Map<string, { value: number; unit: string; x: number; y: number; w: number; h: number }>();
 
-  // Record a found parameter, spanning bbox from label to value.
-  // Validates value is within the plausible range for this parameter.
+  // Record a found parameter. Bbox is always anchored at the label word to
+  // avoid misplacement when Tesseract gives the value word an incorrect bbox
+  // (common when values are on lines adjacent to dense text like warning triangles).
   function recordHit(pat: { name: string; unit: string }, labelWord: Word, numWord: Word) {
     if (found.has(pat.name)) return;
     const value = parseNum(numWord.text);
@@ -311,12 +318,12 @@ export async function analyzeWithOCR(
     const nCy = (numWord.bbox.y0 + numWord.bbox.y1) / 2;
     const sameRow = Math.abs(lCy - nCy) < imgHeight * 0.028;
 
-    // If label and value are on the same row, draw a box that covers both.
-    // If value is below the label, just annotate the value's position.
-    const x0 = sameRow ? Math.min(labelWord.bbox.x0, numWord.bbox.x0) : numWord.bbox.x0;
-    const y0 = sameRow ? Math.min(labelWord.bbox.y0, numWord.bbox.y0) : numWord.bbox.y0;
-    const x1 = sameRow ? Math.max(labelWord.bbox.x1, numWord.bbox.x1) : numWord.bbox.x1;
-    const y1 = sameRow ? Math.max(labelWord.bbox.y1, numWord.bbox.y1) : numWord.bbox.y1;
+    // Always start from the label word's left edge so the box is anchored at
+    // the parameter name — even if the value word's OCR bbox is on the wrong row.
+    const x0 = labelWord.bbox.x0;
+    const y0 = labelWord.bbox.y0;
+    const x1 = sameRow ? Math.max(labelWord.bbox.x1, numWord.bbox.x1) : labelWord.bbox.x1;
+    const y1 = sameRow ? Math.max(labelWord.bbox.y1, numWord.bbox.y1) : labelWord.bbox.y1;
 
     found.set(pat.name, {
       value, unit: pat.unit,
@@ -328,9 +335,14 @@ export async function analyzeWithOCR(
   }
 
   // Helper: does this word qualify as a label anchor?
-  // Values can be low-confidence (colored text), but labels in photo noise
-  // tend to be low-confidence too — require a higher bar to filter them out.
   const isLabel = (w: Word) => w.confidence >= LABEL_MIN_CONFIDENCE;
+
+  // Helper: is this label word immediately followed by "=" on the same line?
+  // If so, Passes 1/2 must NOT use spatial search from this position —
+  // it was already tried in Pass 0 and the value was out of range.
+  // Spatial search from a "LABEL =" position would cross into adjacent columns.
+  const hasEqualsAfter = (line: Word[], wi: number) =>
+    line.slice(wi + 1, wi + 4).some(w => w.text.trim() === '=');
 
   // Pass 0: "LABEL = VALUE" — handles Sirius format "K1 = 41.56 D @ 12°"
   for (const line of lines) {
@@ -361,7 +373,9 @@ export async function analyzeWithOCR(
     }
   }
 
-  // Pass 1: match full line text, then locate the label word and search spatially
+  // Pass 1: match full line text, then locate the label word and search spatially.
+  // Skip positions where the label is immediately followed by "=" — those were
+  // handled (and rejected) by Pass 0; spatial search there would cross columns.
   for (const line of lines) {
     const lineText = line.map((w) => w.text).join(' ');
     for (const pat of PARAM_PATTERNS) {
@@ -369,6 +383,7 @@ export async function analyzeWithOCR(
       let labelWord: Word | undefined;
       for (let wi = 0; wi < line.length; wi++) {
         if (!isLabel(line[wi])) continue;
+        if (hasEqualsAfter(line, wi)) continue; // already tried by Pass 0
         const joined = line.slice(wi, wi + 2).map((w) => w.text).join(' ');
         if (pat.regex.test(line[wi].text) || pat.regex.test(joined)) {
           labelWord = line[wi];
@@ -381,13 +396,15 @@ export async function analyzeWithOCR(
     }
   }
 
-  // Pass 2: spatial search across the full word pool — prevents crossing column boundaries
+  // Pass 2: spatial search across the full word pool.
+  // Same "skip if followed by =" guard as Pass 1.
   for (const pat of PARAM_PATTERNS) {
     if (found.has(pat.name)) continue;
     outer: for (let li = 0; li < lines.length; li++) {
       const line = lines[li];
       for (let wi = 0; wi < line.length; wi++) {
         if (!isLabel(line[wi])) continue;
+        if (hasEqualsAfter(line, wi)) continue;
         const joined = line.slice(wi, wi + 2).map((w) => w.text).join(' ');
         if (!pat.regex.test(line[wi].text) && !pat.regex.test(joined)) continue;
         const labelWord = line[wi];
