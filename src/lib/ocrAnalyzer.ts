@@ -176,11 +176,24 @@ export async function analyzeWithOCR(
   let imgHeight = 1;
 
   try {
+    // Request blocks:true — Tesseract.js v5+ removed top-level data.words.
+    // Words are now nested: data.blocks[].paragraphs[].lines[].words[]
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await worker.recognize(imgBytes as any);
+    const { data } = await worker.recognize(imgBytes as any, {}, { blocks: true } as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const page = data as any;
-    words = (page.words ?? []) as Word[];
+
+    // Flatten the block→paragraph→line→word hierarchy
+    for (const block of (page.blocks ?? [])) {
+      for (const para of (block.paragraphs ?? [])) {
+        for (const line of (para.lines ?? [])) {
+          for (const word of (line.words ?? [])) {
+            words.push(word as Word);
+          }
+        }
+      }
+    }
+
     if (words.length > 0) {
       imgWidth  = Math.max(...words.map((w) => w.bbox.x1), 1);
       imgHeight = Math.max(...words.map((w) => w.bbox.y1), 1);
