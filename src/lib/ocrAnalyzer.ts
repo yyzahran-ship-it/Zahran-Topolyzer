@@ -60,6 +60,9 @@ interface Word {
 // OCR words below this confidence level are treated as noise.
 // Sirius uses red/blue colored text for K values which can drop confidence — keep threshold low.
 const MIN_CONFIDENCE = 20;
+// Label words (the ones matching parameter name regex) must be higher confidence
+// to avoid phantom matches from photo borders, shadows, or paper bleed-through.
+const LABEL_MIN_CONFIDENCE = 50;
 
 // Plausible value ranges — values outside are rejected as mis-reads
 const RANGES: Partial<Record<string, [number, number]>> = {
@@ -304,6 +307,11 @@ export async function analyzeWithOCR(
     });
   }
 
+  // Helper: does this word qualify as a label anchor?
+  // Values can be low-confidence (colored text), but labels in photo noise
+  // tend to be low-confidence too — require a higher bar to filter them out.
+  const isLabel = (w: Word) => w.confidence >= LABEL_MIN_CONFIDENCE;
+
   // Pass 0: "LABEL = VALUE" — handles Sirius format "K1 = 41.56 D @ 12°"
   for (const line of lines) {
     for (const pat of PARAM_PATTERNS) {
@@ -311,6 +319,7 @@ export async function analyzeWithOCR(
       let labelWord: Word | undefined;
       let eqIdx = -1;
       for (let wi = 0; wi < line.length; wi++) {
+        if (!isLabel(line[wi])) continue;
         const joined = line.slice(wi, wi + 2).map(w => w.text).join(' ');
         if (pat.regex.test(line[wi].text) || pat.regex.test(joined)) {
           labelWord = line[wi];
@@ -339,6 +348,7 @@ export async function analyzeWithOCR(
       if (found.has(pat.name) || !pat.regex.test(lineText)) continue;
       let labelWord: Word | undefined;
       for (let wi = 0; wi < line.length; wi++) {
+        if (!isLabel(line[wi])) continue;
         const joined = line.slice(wi, wi + 2).map((w) => w.text).join(' ');
         if (pat.regex.test(line[wi].text) || pat.regex.test(joined)) {
           labelWord = line[wi];
@@ -357,10 +367,10 @@ export async function analyzeWithOCR(
     outer: for (let li = 0; li < lines.length; li++) {
       const line = lines[li];
       for (let wi = 0; wi < line.length; wi++) {
+        if (!isLabel(line[wi])) continue;
         const joined = line.slice(wi, wi + 2).map((w) => w.text).join(' ');
         if (!pat.regex.test(line[wi].text) && !pat.regex.test(joined)) continue;
         const labelWord = line[wi];
-        // Use spatial proximity search instead of linear lookahead
         const numWord = nearbyNum(labelWord, words, imgWidth, imgHeight, pat.name);
         if (numWord) { recordHit(pat, labelWord, numWord); break outer; }
       }
@@ -373,17 +383,17 @@ export async function analyzeWithOCR(
     outer: for (let li = 0; li < lines.length; li++) {
       const line = lines[li];
       for (let wi = 0; wi < line.length; wi++) {
+        if (!isLabel(line[wi])) continue;
         const joined = line.slice(wi, wi + 2).map((w) => w.text).join(' ');
         if (!pat.regex.test(line[wi].text) && !pat.regex.test(joined)) continue;
         const labelWord = line[wi];
-        // Look left on the same line; respect value range
         const before = line.slice(0, wi).filter(w => {
           const n = parseNum(w.text);
           if (n === null) return false;
           const rng = RANGES[pat.name];
           return !rng || (n >= rng[0] && n <= rng[1]);
         });
-        const numWord = before[before.length - 1]; // closest to label
+        const numWord = before[before.length - 1];
         if (numWord) { recordHit(pat, labelWord, numWord); break outer; }
       }
     }
@@ -404,7 +414,11 @@ export async function analyzeWithOCR(
 
   const entries = Array.from(found.entries()).map(([name, d]) => ({
     name, value: d.value, unit: d.unit,
-    x: d.x, y: d.y, width: Math.max(d.w, 0.04), height: Math.max(d.h, 0.02),
+    x: d.x, y: d.y,
+    // Min size ensures the box is always visible; max size prevents spanning
+    // multiple columns or wrapping around OCR bbox oddities.
+    width:  Math.min(Math.max(d.w, 0.04), 0.40),
+    height: Math.min(Math.max(d.h, 0.02), 0.06),
   }));
 
   const fullText = words.map((w) => w.text).join(' ').toLowerCase();
