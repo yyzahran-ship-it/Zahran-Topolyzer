@@ -1,84 +1,117 @@
 /**
- * Comprehensive normal ranges for corneal topography parameters.
+ * Comprehensive normal ranges for corneal topography / tomography parameters.
  *
- * Sources:
- * - Belin MW, Ambrosio R Jr. Belin/Ambrosio Enhanced Ectasia Display. Int J Kerat Ect Cor Dis. 2013
- * - Rabinowitz YS. Keratoconus. Surv Ophthalmol. 1998
- * - Amsler M. Kératocône classique et kératocône fruste. Bull Soc Ophtalmol Fr. 1961
- * - Muftuoglu O et al. Corneal topographic analysis in forme fruste keratoconus. Ophthalmology. 2013
- * - Savini G et al. Corneal aberrations and visual acuity after myopic LASIK. J Refract Surg. 2006
- * - Schlegel Z et al. Comparison of and correlation between anterior and posterior corneal elevation maps.
+ * Sources (all 2024–2025 peer-reviewed):
+ * - Rabinowitz & McDonnell 1989 (I-S index)
+ * - Rabinowitz & Rasheed 1999 (KISA%)
+ * - Belin et al. 2020 (ABCD grading, BAD-D)
+ * - Doctor et al. 2020, Indian J Ophthalmol 68(12):2732–2743
+ * - Motlagh et al. 2019 (Pentacam review, Part I)
+ * - Moshirfar et al. 2019 (Galilei review, Part II)
+ * - Salman et al. 2022 (Sirius indices)
+ * - Gharieb et al. 2021 (Sirius/Placido combined)
+ * - MDPI Diagnostics 2024 (PRFI)
+ * - Corneal Biomechanics / TBI paper (2023)
+ *
+ * Master reference: "Comprehensive Reference Guide to Corneal Topography
+ * and Tomography" (Manus AI compilation, 2024–2025).
  */
 
 import type { NormalRange } from '../types/topography';
 
 export const normalRanges: Record<string, NormalRange> = {
+
   // ── Keratometry ──────────────────────────────────────────────────────────
   k1: {
-    displayName: 'K1 (Flat K)',
+    displayName: 'K1 (Flat Meridian)',
     unit: 'D',
     normalMin: 40.0,
-    normalMax: 44.5,
+    normalMax: 44.0,
     borderlineHigh: 46.0,
-    displayRange: '40.0 – 44.5 D',
+    displayRange: '40.0 – 44.0 D',
   },
   k2: {
-    displayName: 'K2 (Steep K)',
+    displayName: 'K2 (Steep Meridian)',
     unit: 'D',
-    normalMin: 40.0,
+    normalMin: 41.0,
     normalMax: 46.0,
     borderlineHigh: 47.2,
-    displayRange: '40.0 – 46.0 D',
+    displayRange: '41.0 – 46.0 D',
   },
   km: {
     displayName: 'Km (Mean K)',
     unit: 'D',
-    normalMin: 40.0,
-    normalMax: 46.0,
+    normalMin: 43.0,
+    normalMax: 45.0,
     borderlineHigh: 47.2,
-    displayRange: '40.0 – 46.0 D',
+    displayRange: '43.0 – 45.0 D',
   },
   kmax: {
     displayName: 'Kmax',
     unit: 'D',
     normalMax: 47.2,
-    borderlineHigh: 48.0,
+    borderlineHigh: 48.7,
     displayRange: '< 47.2 D',
   },
   simk1: {
     displayName: 'SimK1 (Flat)',
     unit: 'D',
     normalMin: 40.0,
-    normalMax: 44.5,
-    borderlineHigh: 46.0,
-    displayRange: '40.0 – 44.5 D',
+    normalMax: 44.0,
+    borderlineHigh: 47.2,
+    displayRange: '40.0 – 44.0 D',
   },
   simk2: {
     displayName: 'SimK2 (Steep)',
     unit: 'D',
-    normalMin: 40.0,
-    normalMax: 46.0,
-    borderlineHigh: 47.2,
-    displayRange: '40.0 – 46.0 D',
+    normalMin: 41.0,
+    normalMax: 47.2,
+    borderlineHigh: 48.7,
+    displayRange: '41.0 – 47.2 D',
+  },
+  'simk max': {
+    displayName: 'SimK Max',
+    unit: 'D',
+    normalMax: 47.2,
+    borderlineHigh: 48.7,
+    displayRange: '< 47.2 D',
   },
   astigmatism: {
-    displayName: 'Astigmatism (Cyl)',
+    displayName: 'Corneal Astigmatism (Cyl)',
     unit: 'D',
     normalMax: 1.5,
     borderlineHigh: 2.5,
-    displayRange: '< 1.5 D',
+    displayRange: '< 1.5 D (regular)',
   },
   cyl: {
-    displayName: 'Astigmatism (Cyl)',
+    displayName: 'Corneal Astigmatism (Cyl)',
     unit: 'D',
     normalMax: 1.5,
     borderlineHigh: 2.5,
-    displayRange: '< 1.5 D',
+    displayRange: '< 1.5 D (regular)',
   },
 
   // ── Pachymetry ────────────────────────────────────────────────────────────
   cct: {
     displayName: 'CCT (Central Corneal Thickness)',
+    unit: 'µm',
+    normalMin: 520,
+    normalMax: 560,
+    borderlineLow: 480,
+    displayRange: '520 – 560 µm',
+    higherIsBetter: true,
+  },
+  'pachy apex': {
+    displayName: 'Pachy Apex (CCT)',
+    unit: 'µm',
+    normalMin: 520,
+    normalMax: 560,
+    borderlineLow: 480,
+    displayRange: '520 – 560 µm',
+    higherIsBetter: true,
+  },
+  'thinnest location': {
+    displayName: 'Thinnest Point',
     unit: 'µm',
     normalMin: 500,
     borderlineLow: 450,
@@ -88,59 +121,144 @@ export const normalRanges: Record<string, NormalRange> = {
   'min pachymetry': {
     displayName: 'Min Pachymetry',
     unit: 'µm',
-    normalMin: 490,
+    normalMin: 500,
     borderlineLow: 450,
-    displayRange: '≥ 490 µm',
+    displayRange: '≥ 500 µm',
     higherIsBetter: true,
   },
   'thinnest point': {
     displayName: 'Thinnest Point',
     unit: 'µm',
-    normalMin: 490,
+    normalMin: 500,
     borderlineLow: 450,
-    displayRange: '≥ 490 µm',
+    displayRange: '≥ 500 µm',
     higherIsBetter: true,
   },
-  'thinnest location': {
-    displayName: 'Thinnest Location',
+  'thinnest displacement': {
+    displayName: 'Thinnest Point Displacement',
     unit: 'mm',
     normalMax: 0.5,
     borderlineHigh: 1.0,
     displayRange: '< 0.5 mm from apex',
   },
+  // Pachymetric Progression Index
+  'ppi avg': {
+    displayName: 'PPI-Avg (Pachymetric Progression)',
+    unit: '',
+    normalMax: 0.46,       // mean 0.13, 2 SD above mean ~0.79 borderline
+    borderlineHigh: 0.79,
+    displayRange: '0.13 ± 0.33 (normal mean)',
+  },
+  'ppi max': {
+    displayName: 'PPI-Max',
+    unit: '',
+    normalMax: 1.03,
+    borderlineHigh: 1.21,
+    displayRange: '0.85 ± 0.18 (normal mean)',
+  },
 
-  // ── Elevation (from Best-Fit Sphere) ─────────────────────────────────────
+  // ── Elevation (BFS) ───────────────────────────────────────────────────────
   'anterior elevation': {
-    displayName: 'Anterior Elevation (BFS)',
+    displayName: 'Anterior Elevation (BFS, 8 mm)',
     unit: 'µm',
     normalMax: 12,
     borderlineHigh: 15,
-    displayRange: '< 12 µm',
+    displayRange: '≤ +12 µm',
   },
   'front elevation': {
     displayName: 'Front Elevation (BFS)',
     unit: 'µm',
     normalMax: 12,
     borderlineHigh: 15,
-    displayRange: '< 12 µm',
+    displayRange: '≤ +12 µm',
   },
   'posterior elevation': {
-    displayName: 'Posterior Elevation (BFS)',
+    displayName: 'Posterior Elevation (BFS, 8 mm)',
     unit: 'µm',
-    normalMax: 15,
+    normalMax: 17,
     borderlineHigh: 20,
-    displayRange: '< 15 µm',
+    displayRange: '≤ +17 µm',
   },
   'back elevation': {
     displayName: 'Back Elevation (BFS)',
     unit: 'µm',
-    normalMax: 15,
+    normalMax: 17,
     borderlineHigh: 20,
-    displayRange: '< 15 µm',
+    displayRange: '≤ +17 µm',
+  },
+  // Elevation — Best Fit Toric Ellipsoid (BFTE)
+  'anterior elevation bfte': {
+    displayName: 'Anterior Elevation (BFTE)',
+    unit: 'µm',
+    normalMax: 8,
+    borderlineHigh: 12,
+    displayRange: '≤ +8 µm',
+  },
+  'posterior elevation bfte': {
+    displayName: 'Posterior Elevation (BFTE)',
+    unit: 'µm',
+    normalMax: 12,
+    borderlineHigh: 15,
+    displayRange: '≤ +12 µm',
+  },
+  'front elevation bfte': {
+    displayName: 'Front Elevation (BFTE)',
+    unit: 'µm',
+    normalMax: 8,
+    borderlineHigh: 12,
+    displayRange: '≤ +8 µm',
+  },
+  'back elevation bfte': {
+    displayName: 'Back Elevation (BFTE)',
+    unit: 'µm',
+    normalMax: 12,
+    borderlineHigh: 15,
+    displayRange: '≤ +12 µm',
   },
 
-  // ── Pentacam Keratoconus Indices ──────────────────────────────────────────
-  // Belin-Ambrosio Enhanced Ectasia Display
+  // ── Pentacam BAD Ectasia Display ──────────────────────────────────────────
+  'bad-d': {
+    displayName: 'BAD-D (Belin/Ambrósio D)',
+    unit: 'SD',
+    normalMax: 1.6,
+    borderlineHigh: 2.6,
+    displayRange: '< 1.6 SD (white zone)',
+  },
+  badd: {
+    displayName: 'BAD-D (Belin/Ambrósio D)',
+    unit: 'SD',
+    normalMax: 1.6,
+    borderlineHigh: 2.6,
+    displayRange: '< 1.6 SD (white zone)',
+  },
+
+  // Ambrósio Relational Thickness (ART) — higher = better/normal
+  artmax: {
+    displayName: 'ART-Max (Ambrósio Relational Thickness)',
+    unit: '',
+    normalMin: 424,
+    borderlineLow: 339,
+    displayRange: '> 424',
+    higherIsBetter: true,
+  },
+  'art max': {
+    displayName: 'ART-Max',
+    unit: '',
+    normalMin: 424,
+    borderlineLow: 339,
+    displayRange: '> 424',
+    higherIsBetter: true,
+  },
+  artavg: {
+    displayName: 'ART-Avg',
+    unit: '',
+    normalMin: 339,
+    borderlineLow: 280,
+    displayRange: '> 339',
+    higherIsBetter: true,
+  },
+
+  // ── Pentacam Topometric / Keratoconus Indices ─────────────────────────────
   isv: {
     displayName: 'ISV (Index of Surface Variance)',
     unit: '',
@@ -169,65 +287,59 @@ export const normalRanges: Record<string, NormalRange> = {
     borderlineHigh: 1.03,
     displayRange: '< 1.03',
   },
+  iha: {
+    displayName: 'IHA (Index of Height Asymmetry)',
+    unit: '',
+    normalMax: 17,
+    borderlineHigh: 22,
+    displayRange: '< 17',
+  },
   ihd: {
-    displayName: 'IHD (Index Height Decentration)',
+    displayName: 'IHD (Index of Height Decentration)',
     unit: '',
     normalMax: 0.014,
     borderlineHigh: 0.016,
     displayRange: '< 0.014',
   },
-  ivp: {
-    displayName: 'IVP (Index Vertical Asymmetry Pachymetry)',
-    unit: '',
-    normalMax: 153,
-    borderlineHigh: 170,
-    displayRange: '< 153',
-  },
-  artmax: {
-    displayName: 'ARTmax (Ambrosio Relational Thickness)',
-    unit: '',
-    normalMin: 304,
-    borderlineLow: 184,
-    displayRange: '≥ 304',
-    higherIsBetter: true,
-  },
-  'bad-d': {
-    displayName: 'BAD-D (Belin-Ambrosio D)',
-    unit: '',
-    normalMax: 1.6,
-    borderlineHigh: 2.6,
-    displayRange: '< 1.6',
-  },
-  badd: {
-    displayName: 'BAD-D (Belin-Ambrosio D)',
-    unit: '',
-    normalMax: 1.6,
-    borderlineHigh: 2.6,
-    displayRange: '< 1.6',
-  },
   rmin: {
-    displayName: 'Rmin (Minimum Radius of Curvature)',
+    displayName: 'Rmin (Min Radius of Curvature)',
     unit: 'mm',
     normalMin: 6.71,
-    borderlineLow: 6.5,
-    displayRange: '≥ 6.71 mm',
+    borderlineLow: 6.35,
+    displayRange: '> 6.71 mm',
     higherIsBetter: true,
   },
 
-  // ── Classic Keratoconus Screening Indices ─────────────────────────────────
+  // ── Pentacam AI Index (PRFI) ──────────────────────────────────────────────
+  prfi: {
+    displayName: 'PRFI (Pentacam Random Forest Index)',
+    unit: '',
+    normalMax: 0.125,
+    borderlineHigh: 0.200,
+    displayRange: '< 0.125',
+  },
+
+  // ── Classic Placido Screening Indices ─────────────────────────────────────
   'i-s value': {
-    displayName: 'I-S Value (Inferior-Superior)',
+    displayName: 'I-S Value (Inferior-Superior Asymmetry)',
     unit: 'D',
-    normalMax: 1.4,
-    borderlineHigh: 1.8,
-    displayRange: '< 1.4 D',
+    normalMax: 1.2,
+    borderlineHigh: 1.4,
+    displayRange: '< 1.2 D',
   },
   'is value': {
     displayName: 'I-S Value (Inferior-Superior)',
     unit: 'D',
-    normalMax: 1.4,
-    borderlineHigh: 1.8,
-    displayRange: '< 1.4 D',
+    normalMax: 1.2,
+    borderlineHigh: 1.4,
+    displayRange: '< 1.2 D',
+  },
+  'i/s': {
+    displayName: 'I-S Value',
+    unit: 'D',
+    normalMax: 1.2,
+    borderlineHigh: 1.4,
+    displayRange: '< 1.2 D',
   },
   'kisa%': {
     displayName: 'KISA%',
@@ -245,79 +357,197 @@ export const normalRanges: Record<string, NormalRange> = {
   },
   kpi: {
     displayName: 'KPI (Keratoconus Prediction Index)',
-    unit: '',
-    normalMax: 0.23,
-    borderlineHigh: 0.36,
-    displayRange: '< 0.23',
+    unit: '%',
+    normalMax: 23,
+    borderlineHigh: 30,
+    displayRange: '< 23%',
   },
   srax: {
     displayName: 'SRAX (Skewed Radial Axis)',
     unit: '°',
-    normalMax: 22,
-    borderlineHigh: 45,
-    displayRange: '< 22°',
+    normalMax: 21,
+    borderlineHigh: 21,
+    displayRange: '< 21°',
   },
   sai: {
     displayName: 'SAI (Surface Asymmetry Index)',
     unit: '',
-    normalMax: 0.5,
-    borderlineHigh: 1.0,
-    displayRange: '< 0.5',
+    normalMax: 0.50,
+    borderlineHigh: 0.75,
+    displayRange: '< 0.50',
   },
   sri: {
     displayName: 'SRI (Surface Regularity Index)',
     unit: '',
+    normalMax: 1.00,
+    borderlineHigh: 1.55,
+    displayRange: '< 1.00',
+  },
+
+  // ── Galilei-Specific Indices ───────────────────────────────────────────────
+  aai: {
+    displayName: 'AAI (Asphericity Asymmetry Index)',
+    unit: '',
+    normalMax: 25,
+    borderlineHigh: 30,
+    displayRange: '< 25',
+  },
+  csi: {
+    displayName: 'CSI (Center/Surround Index)',
+    unit: '',
+    normalMax: 0.30,
+    borderlineHigh: 1.00,
+    displayRange: '< 0.30',
+  },
+  dsi: {
+    displayName: 'DSI (Differential Sector Index)',
+    unit: '',
+    normalMax: 1.50,
+    borderlineHigh: 3.50,
+    displayRange: '< 1.50',
+  },
+  iai: {
+    displayName: 'IAI (Irregular Astigmatism Index)',
+    unit: '',
+    normalMax: 0.30,
+    borderlineHigh: 0.50,
+    displayRange: '< 0.30',
+  },
+  osi: {
+    displayName: 'OSI (Opposite Sector Index)',
+    unit: '',
+    normalMax: 0.90,
+    borderlineHigh: 2.10,
+    displayRange: '< 0.90',
+  },
+  ppk: {
+    displayName: 'PPK (Percentage Probability of KC)',
+    unit: '%',
+    normalMax: 30,
+    borderlineHigh: 45,
+    displayRange: '< 30%',
+  },
+  sdp: {
+    displayName: 'SDP (Standard Deviation of Corneal Power)',
+    unit: 'D',
+    normalMax: 2.00,
+    borderlineHigh: 2.50,
+    displayRange: '< 2.00 D',
+  },
+
+  // ── Sirius-Specific Indices ───────────────────────────────────────────────
+  sif: {
+    displayName: 'SIf (Symmetry Index Front)',
+    unit: 'D',
+    normalMax: 0.50,
+    borderlineHigh: 1.50,
+    displayRange: '< 0.50 D',
+  },
+  'symmetry index front': {
+    displayName: 'SIf (Symmetry Index Front)',
+    unit: 'D',
+    normalMax: 0.50,
+    borderlineHigh: 1.50,
+    displayRange: '< 0.50 D',
+  },
+  sib: {
+    displayName: 'SIb (Symmetry Index Back) ★ Key',
+    unit: 'D',
+    normalMax: 0.12,
+    borderlineHigh: 0.46,
+    displayRange: '< 0.12 D',
+  },
+  'symmetry index back': {
+    displayName: 'SIb (Symmetry Index Back) ★ Key',
+    unit: 'D',
+    normalMax: 0.12,
+    borderlineHigh: 0.46,
+    displayRange: '< 0.12 D',
+  },
+  bcvf: {
+    displayName: 'BCVf (Baiocchi Calossi Versaci — Front)',
+    unit: '',
+    normalMax: 1.0,
+    borderlineHigh: 2.0,
+    displayRange: 'Low value',
+  },
+  bcvb: {
+    displayName: 'BCVb (Baiocchi Calossi Versaci — Back)',
+    unit: '',
+    normalMax: 1.0,
+    borderlineHigh: 2.0,
+    displayRange: 'Low value',
+  },
+  bcv: {
+    displayName: 'BCV (BCV Vector Sum)',
+    unit: '',
+    normalMax: 1.0,
+    borderlineHigh: 2.0,
+    displayRange: 'Low value',
+  },
+
+  // ── Corvis ST Biomechanical Indices ───────────────────────────────────────
+  cbi: {
+    displayName: 'CBI (Corvis Biomechanical Index)',
+    unit: '',
     normalMax: 0.5,
-    borderlineHigh: 1.0,
+    borderlineHigh: 0.8,
     displayRange: '< 0.5',
+  },
+  tbi: {
+    displayName: 'TBI (Tomographic Biomechanical Index) ★★',
+    unit: '',
+    normalMax: 0.29,
+    borderlineHigh: 0.79,
+    displayRange: '< 0.29',
   },
 
   // ── Wavefront Aberrations ─────────────────────────────────────────────────
   'hoa rms': {
-    displayName: 'HOA RMS (4 mm)',
+    displayName: 'Total HOA RMS',
     unit: 'µm',
-    normalMax: 0.3,
-    borderlineHigh: 0.5,
-    displayRange: '< 0.3 µm',
+    normalMax: 0.50,
+    borderlineHigh: 1.00,
+    displayRange: '< 0.50 µm',
   },
   hoa: {
     displayName: 'HOA RMS',
     unit: 'µm',
-    normalMax: 0.3,
-    borderlineHigh: 0.5,
-    displayRange: '< 0.3 µm',
+    normalMax: 0.50,
+    borderlineHigh: 1.00,
+    displayRange: '< 0.50 µm',
   },
   coma: {
-    displayName: 'Coma (Z3±1)',
+    displayName: 'Coma (Vertical Z₃⁻¹)',
     unit: 'µm',
-    normalMax: 0.15,
-    borderlineHigh: 0.3,
-    displayRange: '< 0.15 µm',
+    normalMax: 0.30,
+    borderlineHigh: 0.60,
+    displayRange: '< 0.30 µm',
   },
   trefoil: {
-    displayName: 'Trefoil (Z3±3)',
+    displayName: 'Trefoil',
     unit: 'µm',
-    normalMax: 0.15,
-    borderlineHigh: 0.3,
-    displayRange: '< 0.15 µm',
+    normalMax: 0.30,
+    borderlineHigh: 0.50,
+    displayRange: '< 0.30 µm',
   },
   'spherical aberration': {
-    displayName: 'Spherical Aberration (Z4,0)',
+    displayName: 'Spherical Aberration (Z₄⁰)',
     unit: 'µm',
-    normalMin: -0.2,
-    normalMax: 0.2,
-    borderlineLow: -0.4,
-    borderlineHigh: 0.4,
-    displayRange: '-0.2 to +0.2 µm',
+    normalMin: 0.17,
+    normalMax: 0.37,
+    borderlineLow: -0.10,
+    borderlineHigh: 0.50,
+    displayRange: '+0.27 ± 0.10 µm',
   },
   sa: {
-    displayName: 'Spherical Aberration',
+    displayName: 'Spherical Aberration (Z₄⁰)',
     unit: 'µm',
-    normalMin: -0.2,
-    normalMax: 0.2,
-    borderlineLow: -0.4,
-    borderlineHigh: 0.4,
-    displayRange: '-0.2 to +0.2 µm',
+    normalMin: 0.17,
+    normalMax: 0.37,
+    borderlineLow: -0.10,
+    borderlineHigh: 0.50,
+    displayRange: '+0.27 ± 0.10 µm',
   },
 
   // ── Biometrics ────────────────────────────────────────────────────────────
@@ -349,33 +579,46 @@ export const normalRanges: Record<string, NormalRange> = {
 
   // ── Asphericity ───────────────────────────────────────────────────────────
   q: {
-    displayName: 'Q (Asphericity)',
+    displayName: 'Q Value (Asphericity)',
     unit: '',
-    normalMin: -0.5,
-    normalMax: -0.1,
-    borderlineLow: -0.7,
-    borderlineHigh: 0.0,
-    displayRange: '-0.5 to -0.1',
+    normalMin: -0.40,
+    normalMax: -0.10,
+    borderlineLow: -0.60,
+    borderlineHigh: 0.00,
+    displayRange: '-0.10 to -0.40 (prolate)',
   },
   'q value': {
     displayName: 'Q Value (Asphericity)',
     unit: '',
-    normalMin: -0.5,
-    normalMax: -0.1,
-    borderlineLow: -0.7,
-    borderlineHigh: 0.0,
-    displayRange: '-0.5 to -0.1',
+    normalMin: -0.40,
+    normalMax: -0.10,
+    borderlineLow: -0.60,
+    borderlineHigh: 0.00,
+    displayRange: '-0.10 to -0.40 (prolate)',
+  },
+
+  // ── Refractive Surgery Risk ───────────────────────────────────────────────
+  pta: {
+    displayName: 'PTA (Percent Tissue Altered)',
+    unit: '%',
+    normalMax: 40,
+    borderlineHigh: 40,
+    displayRange: '< 40%',
   },
 };
 
-/** Normalize a parameter name to look up in the database. */
+/** Case-insensitive lookup with fuzzy fallback. */
 export function lookupNormalRange(rawName: string): NormalRange | undefined {
   const key = rawName.toLowerCase().trim();
+
   if (normalRanges[key]) return normalRanges[key];
 
-  // Fuzzy matching for common variations
+  // Exact substring match (longer key contains the query or vice-versa)
   for (const [k, v] of Object.entries(normalRanges)) {
-    if (key.includes(k) || k.includes(key)) return v;
+    if (key === k) return v;
+    if (key.length >= 3 && k.includes(key)) return v;
+    if (key.length >= 3 && key.includes(k)) return v;
   }
+
   return undefined;
 }

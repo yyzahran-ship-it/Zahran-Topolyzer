@@ -2,32 +2,50 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { AnalysisResult, ParameterStatus, RawParameter, RiskLevel, TopographyParameter } from '../types/topography';
 import { lookupNormalRange } from './normalRanges';
 
-const ANALYSIS_PROMPT = `You are an expert ophthalmologist and corneal topography specialist. Analyze this corneal topography screenshot.
+const ANALYSIS_PROMPT = `You are an expert ophthalmologist specialising in corneal topography and tomography interpretation, with deep knowledge of Pentacam, Sirius, Galilei, Orbscan, Atlas/Zeiss, Keratograph, and TMS devices.
 
 YOUR TASKS:
-1. Identify the device manufacturer (Pentacam, Sirius, Galilei, Orbscan, Atlas, Keratograph, TMS, Magellan, or other)
+1. Identify the device manufacturer (Pentacam/Oculus, Sirius/CSO, Galilei/Ziemer, Orbscan/Bausch&Lomb, Atlas/Zeiss, Keratograph/Oculus, TMS/Tomey, or other)
 2. Identify which eye is shown (OD = right eye, OS = left eye, OU = both)
-3. Extract EVERY numerical measurement visible in the image
+3. Extract EVERY numerical measurement visible — be exhaustive, do not skip any number
 
-For EACH numerical value found, provide:
-- name: The parameter label exactly as shown (e.g. "Kmax", "CCT", "BAD-D", "ISV")
-- value: The numerical value as a number (not a string)
-- unit: The measurement unit (e.g. "D", "µm", "mm", "%", "°")
-- x: Center horizontal position of this number in the image, as a fraction from 0.0 (left) to 1.0 (right)
-- y: Center vertical position of this number in the image, as a fraction from 0.0 (top) to 1.0 (bottom)
-- width: Width of the number text as a fraction of image width (typically 0.03–0.10)
-- height: Height of the number text as a fraction of image height (typically 0.02–0.04)
+For EACH value, provide:
+- name: Exact label shown (e.g. "Kmax", "CCT", "BAD-D", "ISV", "SIb", "ART-Max")
+- value: Numeric value (number type, not string)
+- unit: Unit string ("D", "µm", "mm", "%", "°", "SD", or "" if unitless)
+- x: Center x of the number as fraction 0.0–1.0 (left→right)
+- y: Center y of the number as fraction 0.0–1.0 (top→bottom)
+- width: Width of the number text as fraction of image width (0.03–0.12)
+- height: Height of the number text as fraction of image height (0.02–0.05)
 
-COMMON PARAMETERS TO LOOK FOR (extract ALL you can see):
-• Keratometry: K1, K2, Km, Kmax, SimK1, SimK2, Kf, Ks, Astigmatism/Cyl, Axis
-• Pachymetry: CCT, Min Pachymetry, Thinnest Point, Apex Thickness, Pachymetric Minimum
-• Elevation: Anterior Elevation, Posterior Elevation, Front Elevation, Back Elevation (from BFS or BFTE)
-• Pentacam Indices: ISV, IVA, KI, CKI, IHD, IVP, ARTmax, BAD-D, Rmin
-• Screening Indices: I-S value, KISA%, KPI, SRAX, SAI, SRI, DSI, OSI, CSI, AA
-• Aberrations: HOA RMS, Coma, Trefoil, Spherical Aberration (SA), Total RMS
-• Biometrics: WTW, ACD, AL, Pupil Diameter, Corneal Volume, Q value
+PARAMETERS TO FIND (extract ALL visible):
 
-Return ONLY this exact JSON structure (no markdown fences, no extra text):
+Keratometry: K1, K2, Km, Kmax, SimK1, SimK2, Kf, Ks, Astigmatism/Cyl, Axis
+
+Pachymetry: CCT, Pachy Apex, Min Pachymetry, Thinnest Point, Thinnest Location,
+Apex Thickness, Thinnest Displacement, PPI-Avg, PPI-Min, PPI-Max
+
+Elevation (specify BFS or BFTE): Anterior Elevation, Posterior Elevation,
+Front Elevation, Back Elevation (both reference bodies if shown)
+
+Pentacam Topometric Indices: ISV, IVA, KI, CKI, IHA, IHD, Rmin,
+BAD-D, ART-Max, ART-Avg, PRFI
+
+Classic Screening Indices: I-S value, KISA%, KPI, SRAX, SAI, SRI,
+DSI, OSI, CSI, IAI, AA
+
+Galilei: AAI, SDP, PPK
+
+Sirius: SIf, SIb, KVf, KVb, BCVf, BCVb, BCV
+
+Biomechanical (Corvis ST): CBI, TBI, SP-A1, DA Ratio
+
+Aberrations: HOA RMS, Total HOA, Vertical Coma, Horizontal Coma,
+Coma, Trefoil, Spherical Aberration, Z4(0)
+
+Biometrics: WTW, ACD, AL, Pupil Diameter, Corneal Volume, Q value, EKR
+
+Return ONLY valid JSON — no markdown fences, no commentary:
 {
   "device": "device name or unknown",
   "eye": "OD" or "OS" or "OU" or "unknown",
@@ -108,53 +126,73 @@ function computeRiskLevel(params: TopographyParameter[]): RiskLevel {
   const abnormal = params.filter((p) => p.status === 'abnormal').length;
   const borderline = params.filter((p) => p.status === 'borderline').length;
 
-  // Check critical parameters
-  const kmax = params.find((p) =>
-    p.name.toLowerCase().includes('kmax')
-  );
-  const badD = params.find((p) =>
-    p.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes('badd') ||
-    p.name.toLowerCase().includes('bad-d')
-  );
-  const cct = params.find((p) =>
-    p.name.toLowerCase() === 'cct' ||
-    p.name.toLowerCase().includes('central corneal')
-  );
+  const find = (needles: string[]) =>
+    params.find((p) => needles.some((n) => p.name.toLowerCase().includes(n)));
 
-  const kmaxAbnormal = kmax?.status === 'abnormal';
-  const badDAbnormal = badD?.status === 'abnormal';
-  const cctAbnormal = cct?.status === 'abnormal';
+  const kmax  = find(['kmax']);
+  const badD  = find(['bad-d', 'badd']);
+  const tbi   = find(['tbi']);
+  const cbi   = find(['cbi']);
+  const prfi  = find(['prfi']);
+  const thinnest = find(['thinnest', 'min pachy']);
+  const postEl   = find(['posterior elev', 'back elev']);
 
-  if (abnormal >= 3 || (kmaxAbnormal && badDAbnormal) || cctAbnormal) {
-    return 'very-high';
-  }
-  if (abnormal >= 2 || (kmaxAbnormal || badDAbnormal)) {
-    return 'high';
-  }
-  if (abnormal >= 1 || borderline >= 3) {
-    return 'moderate';
-  }
+  // Very high: composite AI index red, or multiple critical parameters
+  if (
+    badD?.status  === 'abnormal' ||
+    tbi?.status   === 'abnormal' ||
+    abnormal >= 4
+  ) return 'very-high';
+
+  // High: flagged composite index or 2+ critical parameters abnormal
+  if (
+    kmax?.status    === 'abnormal' ||
+    cbi?.status     === 'abnormal' ||
+    prfi?.status    === 'abnormal' ||
+    postEl?.status  === 'abnormal' ||
+    thinnest?.status === 'abnormal' ||
+    abnormal >= 2
+  ) return 'high';
+
+  // Moderate: 1 abnormal OR composite index borderline OR 3+ borderline
+  if (
+    abnormal >= 1 ||
+    badD?.status  === 'borderline' ||
+    tbi?.status   === 'borderline' ||
+    borderline >= 3
+  ) return 'moderate';
+
   return 'low';
 }
 
+/**
+ * Amsler-Krumeich staging (1938/1998).
+ * Uses Kmax (most available), confirmed by thinnest pachymetry.
+ * Ref: Belin et al. 2020, Table in Section 12.1.
+ */
 function gradeKeratoconus(params: TopographyParameter[]): string | null {
   const kmax = params.find((p) => p.name.toLowerCase().includes('kmax'));
-  const cct = params.find(
-    (p) =>
-      p.name.toLowerCase() === 'cct' ||
-      p.name.toLowerCase().includes('thinnest')
+  const km   = params.find((p) => ['km', 'mean k', 'simk'].includes(p.name.toLowerCase()));
+  const thinnest = params.find((p) =>
+    p.name.toLowerCase().includes('thinnest') || p.name.toLowerCase() === 'cct'
   );
 
-  if (!kmax) return null;
-  const k = kmax.value;
-  const c = cct?.value;
+  const k = kmax?.value ?? km?.value;
+  if (k === undefined || typeof k !== 'number') return null;
+  const c = thinnest?.value;
 
-  // Amsler-Krumeich grading
-  if (k > 55) return 'Keratoconus Stage IV (Amsler-Krumeich) — severe';
-  if (k > 53) return 'Keratoconus Stage III (Amsler-Krumeich)';
-  if (k > 48) return 'Keratoconus Stage II (Amsler-Krumeich)';
-  if (k > 47.2 || (c !== undefined && c < 480))
-    return 'Keratoconus Stage I / Forme Fruste — early ectasia suspected';
+  // Stage 4: Kmax > 55 D or CCT < 200 µm
+  if (k > 55 || (c !== undefined && c < 200))
+    return 'Amsler-Krumeich Stage IV — advanced keratoconus (central scarring expected)';
+  // Stage 3: Kmax 53–55 D, CCT 200–400 µm
+  if (k > 53 || (c !== undefined && c < 400))
+    return 'Amsler-Krumeich Stage III — moderate-to-severe keratoconus';
+  // Stage 2: Kmax 48–53 D, CCT 400–500 µm
+  if (k > 48 || (c !== undefined && c < 500))
+    return 'Amsler-Krumeich Stage II — moderate keratoconus';
+  // Stage 1: Kmax < 48 D, CCT > 500 µm, eccentric steepening
+  if (k > 47.2 || (c !== undefined && c < 500))
+    return 'Amsler-Krumeich Stage I — early keratoconus / forme fruste';
 
   return null;
 }
@@ -173,11 +211,11 @@ function buildSummary(
   }
   if (riskLevel === 'high') {
     const g = grade ? ` ${grade}.` : '';
-    return `${abnormalCount} abnormal parameter${abnormalCount !== 1 ? 's' : ''} detected.${g} Strong suspicion for keratoconus or corneal ectasia. Clinical evaluation and referral recommended.`;
+    return `${abnormalCount} abnormal parameter${abnormalCount !== 1 ? 's' : ''} detected.${g} Strong suspicion for keratoconus or corneal ectasia. Slit-lamp evaluation, serial topography, and specialist referral are recommended. LASER refractive surgery should be deferred pending further evaluation.`;
   }
   // very-high
   const g = grade ? ` ${grade}.` : '';
-  return `Multiple critical parameters abnormal.${g} Findings are highly consistent with keratoconus or advanced ectatic disease. Urgent clinical evaluation required. LASER refractive surgery is contraindicated.`;
+  return `Multiple critical parameters abnormal.${g} Findings are highly consistent with keratoconus or advanced ectatic disease. Urgent cornea specialist referral is required. LASER refractive surgery (LASIK / PRK / SMILE) is CONTRAINDICATED. Consider corneal cross-linking assessment.`;
 }
 
 export async function analyzeTopographyImage(
