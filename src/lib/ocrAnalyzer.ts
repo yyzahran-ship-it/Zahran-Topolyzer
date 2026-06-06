@@ -6,7 +6,7 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /k\s*-?\s*max|kmax/i,                             name: 'Kmax',                unit: 'D'   },
   { regex: /\bk\s*f\b|\bk\s*1\b|flat\s*k/i,                 name: 'K1',                  unit: 'D'   },
   { regex: /\bk\s*s\b|\bk\s*2\b|steep\s*k/i,                name: 'K2',                  unit: 'D'   },
-  { regex: /\bk\s*m\b|mean\s*k/i,                            name: 'Km',                  unit: 'D'   },
+  { regex: /\bk\s*m\b|mean\s*k|\bavg\b/i,                    name: 'Km',                  unit: 'D'   },
   { regex: /sim\.?\s*k\s*1|simk1/i,                          name: 'SimK1',               unit: 'D'   },
   { regex: /sim\.?\s*k\s*2|simk2/i,                          name: 'SimK2',               unit: 'D'   },
   { regex: /\bc\.?\s*c\.?\s*t\b|central\s*corneal\s*thick/i, name: 'CCT',                 unit: 'µm'  },
@@ -57,8 +57,9 @@ interface Word {
   bbox: { x0: number; y0: number; x1: number; y1: number };
 }
 
-// OCR words below this confidence level are treated as noise
-const MIN_CONFIDENCE = 40;
+// OCR words below this confidence level are treated as noise.
+// Sirius uses red/blue colored text for K values which can drop confidence — keep threshold low.
+const MIN_CONFIDENCE = 20;
 
 // Plausible value ranges — values outside are rejected as mis-reads
 const RANGES: Partial<Record<string, [number, number]>> = {
@@ -136,7 +137,9 @@ function nearbyNum(
   return tier2.sort((a, b) => (a.bbox.y0 - b.bbox.y0) || (a.bbox.x0 - b.bbox.x0))[0];
 }
 
-// Upscale image to ~2000px max side for better OCR detail.
+// Upscale to ~2000px and convert to grayscale.
+// Grayscale helps Tesseract read colored text (Sirius shows K2 in red, K1 in blue)
+// which can otherwise have lower OCR confidence on color input.
 async function preprocessForOCR(dataUrl: string): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
@@ -144,11 +147,19 @@ async function preprocessForOCR(dataUrl: string): Promise<string> {
       const W = img.naturalWidth  || img.width  || 1;
       const H = img.naturalHeight || img.height || 1;
       const scale = Math.min(3, Math.max(1, 2000 / Math.max(W, H)));
-      if (scale <= 1.05) { resolve(dataUrl); return; }
       const canvas = document.createElement('canvas');
       canvas.width  = Math.round(W * scale);
       canvas.height = Math.round(H * scale);
-      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      // Grayscale conversion: improves OCR confidence on colored text
+      const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = id.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        d[i] = d[i + 1] = d[i + 2] = g;
+      }
+      ctx.putImageData(id, 0, 0);
       resolve(canvas.toDataURL('image/jpeg', 0.92));
     };
     img.onerror = () => resolve(dataUrl);
@@ -291,6 +302,34 @@ export async function analyzeWithOCR(
       w: (x1 - x0) / imgWidth,
       h: (y1 - y0) / imgHeight,
     });
+  }
+
+  // Pass 0: "LABEL = VALUE" — handles Sirius format "K1 = 41.56 D @ 12°"
+  for (const line of lines) {
+    for (const pat of PARAM_PATTERNS) {
+      if (found.has(pat.name)) continue;
+      let labelWord: Word | undefined;
+      let eqIdx = -1;
+      for (let wi = 0; wi < line.length; wi++) {
+        const joined = line.slice(wi, wi + 2).map(w => w.text).join(' ');
+        if (pat.regex.test(line[wi].text) || pat.regex.test(joined)) {
+          labelWord = line[wi];
+          // "=" must appear within the next 3 words (handles "K1 = ", "Cyl = ", etc.)
+          for (let j = wi + 1; j <= wi + 3 && j < line.length; j++) {
+            if (line[j].text.trim() === '=') { eqIdx = j; break; }
+          }
+          break;
+        }
+      }
+      if (!labelWord || eqIdx < 0) continue;
+      const numWord = line.slice(eqIdx + 1).find(w => {
+        const n = parseNum(w.text);
+        if (n === null) return false;
+        const rng = RANGES[pat.name];
+        return !rng || (n >= rng[0] && n <= rng[1]);
+      });
+      if (numWord) recordHit(pat, labelWord, numWord);
+    }
   }
 
   // Pass 1: match full line text, then locate the label word and search spatially
