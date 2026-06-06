@@ -5,8 +5,8 @@ import { ImageUploader } from './components/ImageUploader';
 import { AnnotatedCanvas } from './components/AnnotatedCanvas';
 import { ParameterTable } from './components/ParameterTable';
 import { ResultSummary } from './components/ResultSummary';
+import { ManualEntry } from './components/ManualEntry';
 import { analyzeTopographyImage } from './lib/analyzer';
-import { analyzeWithOCR } from './lib/ocrAnalyzer';
 import type { AnalysisResult } from './types/topography';
 
 const STORAGE_KEY = 'zt_api_key';
@@ -25,7 +25,6 @@ export default function App() {
   const [imageMime, setImageMime] = useState<'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'>('image/jpeg');
 
   const [analyzing, setAnalyzing] = useState(false);
-  const [progress, setProgress] = useState('');
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hoveredParam, setHoveredParam] = useState<string | null>(null);
@@ -48,24 +47,9 @@ export default function App() {
     []
   );
 
-  const runOcr = useCallback(async (dataUrl: string) => {
-    setAnalyzing(true);
-    setError(null);
-    try {
-      const r = await analyzeWithOCR(dataUrl, setProgress);
-      setResult(r);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setAnalyzing(false);
-      setProgress('');
-    }
-  }, []);
-
   const runAI = useCallback(async (base64: string, mime: typeof imageMime) => {
     if (!apiKey) return;
     setAnalyzing(true);
-    setProgress('Sending to Claude Vision…');
     setError(null);
     try {
       const r = await analyzeTopographyImage(base64, mime, apiKey);
@@ -80,19 +64,15 @@ export default function App() {
       }
     } finally {
       setAnalyzing(false);
-      setProgress('');
     }
   }, [apiKey]);
 
-  // Auto-run analysis when image is set
+  // Auto-run AI analysis when image arrives in AI mode
   useEffect(() => {
-    if (!imageDataUrl || !imageBase64 || analyzing || result) return;
-    if (mode === 'offline') {
-      runOcr(imageDataUrl);
-    } else if (mode === 'ai' && apiKey) {
+    if (mode === 'ai' && imageBase64 && apiKey && !analyzing && !result) {
       runAI(imageBase64, imageMime);
     }
-  }, [imageDataUrl, imageBase64, imageMime, mode, apiKey, analyzing, result, runOcr, runAI]);
+  }, [mode, imageBase64, imageMime, apiKey, analyzing, result, runAI]);
 
   const reset = () => {
     setImageBase64(null);
@@ -129,9 +109,8 @@ export default function App() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4">
               <rect x="2" y="3" width="20" height="14" rx="2" />
               <path d="M8 21h8M12 17v4" />
-              <line x1="2" y1="8" x2="22" y2="8" />
             </svg>
-            Offline (OCR)
+            Offline Mode
           </button>
           <button
             onClick={() => switchMode('ai')}
@@ -147,72 +126,81 @@ export default function App() {
           </button>
         </div>
 
-        {/* Mode info banner (only when no image yet) */}
-        {!imageDataUrl && !result && (
-          <div className={`rounded-xl p-4 border ${
-            mode === 'offline' ? 'bg-sky-50 border-sky-200' : 'bg-violet-50 border-violet-200'
-          }`}>
-            {mode === 'offline' ? (
+        {/* ═══════════════ OFFLINE MODE ═══════════════ */}
+        {mode === 'offline' && !result && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+            {/* Left: image reference */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold text-gray-800">Your Topography Report</h2>
+                  <p className="text-xs text-gray-500">Upload to see it here while you enter values</p>
+                </div>
+                {imageDataUrl && (
+                  <button onClick={() => { setImageDataUrl(null); setImageBase64(null); }}
+                    className="text-xs text-gray-400 hover:text-gray-600 underline">Change image</button>
+                )}
+              </div>
+
+              {!imageDataUrl ? (
+                <ImageUploader onImage={handleImage} />
+              ) : (
+                <div className="rounded-xl overflow-hidden border border-gray-200 shadow-sm bg-white">
+                  <img
+                    src={imageDataUrl}
+                    alt="Topography report"
+                    className="w-full object-contain max-h-[60vh]"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Right: parameter entry form */}
+            <div className="space-y-3">
               <div>
-                <p className="font-semibold text-sky-900 text-sm">
-                  Offline OCR Mode — No internet &amp; no account required
-                </p>
-                <p className="text-sky-700 text-sm mt-0.5">
-                  Upload a screenshot from Pentacam, Sirius, Galilei, or Orbscan.
-                  The app reads every number directly on your device using built-in OCR,
-                  then classifies each value and grades ectasia risk — all without internet.
+                <h2 className="font-semibold text-gray-800">Enter Parameters</h2>
+                <p className="text-xs text-gray-500">
+                  Read values from your report and type them in below
                 </p>
               </div>
-            ) : (
-              <div>
-                <p className="font-semibold text-violet-900 text-sm">
-                  AI Mode — More accurate, requires Anthropic API key + internet
-                </p>
-                <p className="text-violet-700 text-sm mt-0.5">
-                  Claude Vision extracts all visible parameters from the image and highlights
-                  abnormal values in place on the screenshot.
-                  {!apiKey && (
-                    <button onClick={() => setShowKeyInput(true)} className="ml-2 underline font-semibold text-violet-900">
-                      Set API key →
-                    </button>
-                  )}
-                </p>
-              </div>
-            )}
+              <ManualEntry onResult={(r) => setResult(r)} />
+            </div>
           </div>
         )}
 
-        {/* Image uploader */}
-        {!imageDataUrl && !result && (
-          <ImageUploader
-            onImage={handleImage}
-            disabled={mode === 'ai' && !apiKey}
-          />
-        )}
-        {mode === 'ai' && !apiKey && !imageDataUrl && (
-          <p className="text-center text-sm text-gray-500">
-            <button onClick={() => setShowKeyInput(true)} className="text-violet-600 underline font-medium">
-              Set your Anthropic API key
-            </button>{' '}
-            to enable AI mode.
-          </p>
+        {/* ═══════════════ AI MODE ═══════════════ */}
+        {mode === 'ai' && !result && !analyzing && (
+          <>
+            {!imageDataUrl ? (
+              <>
+                <div className="bg-violet-50 border border-violet-200 rounded-xl p-4">
+                  <p className="font-semibold text-violet-900 text-sm">AI Mode — Claude Vision reads the image automatically</p>
+                  <p className="text-violet-700 text-sm mt-0.5">
+                    Upload a screenshot and Claude extracts every visible parameter, then highlights
+                    abnormal values on the image.
+                    {!apiKey && (
+                      <button onClick={() => setShowKeyInput(true)} className="ml-2 underline font-semibold text-violet-900">
+                        Set API key →
+                      </button>
+                    )}
+                  </p>
+                </div>
+                <ImageUploader onImage={handleImage} disabled={!apiKey} />
+              </>
+            ) : null}
+          </>
         )}
 
-        {/* Loading / progress */}
+        {/* Loading */}
         {analyzing && (
           <div className="flex flex-col items-center justify-center py-16 gap-4">
             <div className="relative w-16 h-16">
-              <div className={`absolute inset-0 rounded-full border-4 ${mode === 'offline' ? 'border-sky-200' : 'border-violet-200'}`}></div>
-              <div className={`absolute inset-0 rounded-full border-4 border-t-transparent animate-spin ${mode === 'offline' ? 'border-sky-600' : 'border-violet-600'}`}></div>
+              <div className="absolute inset-0 rounded-full border-4 border-violet-200"></div>
+              <div className="absolute inset-0 rounded-full border-4 border-violet-600 border-t-transparent animate-spin"></div>
             </div>
-            <div className="text-center">
-              <p className="font-semibold text-gray-700">
-                {mode === 'offline' ? 'Extracting parameters…' : 'Analyzing with AI…'}
-              </p>
-              {progress && (
-                <p className="text-sm text-gray-500 mt-1">{progress}</p>
-              )}
-            </div>
+            <p className="font-semibold text-gray-700">Analyzing with Claude Vision…</p>
+            <p className="text-sm text-gray-500">Extracting all parameters from the image. ~10–20 seconds.</p>
           </div>
         )}
 
@@ -225,11 +213,11 @@ export default function App() {
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
             <div className="flex-1">
-              <p className="font-semibold text-red-700">Extraction failed</p>
-              <p className="text-sm text-red-600 mt-1 whitespace-pre-wrap">{error}</p>
+              <p className="font-semibold text-red-700">Analysis failed</p>
+              <p className="text-sm text-red-600 mt-1">{error}</p>
             </div>
             <button onClick={reset} className="text-sm text-red-700 hover:text-red-900 font-semibold underline flex-shrink-0">
-              Try another image
+              Retry
             </button>
           </div>
         )}
@@ -241,8 +229,8 @@ export default function App() {
               <div>
                 <h3 className="font-bold text-gray-900">Analysis Results</h3>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  {result.parameters.length} parameter{result.parameters.length !== 1 ? 's' : ''} extracted
-                  {result.device !== 'Unknown' ? ` · ${result.device}` : ''}
+                  {result.parameters.length} parameter{result.parameters.length !== 1 ? 's' : ''} analysed
+                  {result.device !== 'Unknown' && result.device !== 'Manual Entry' ? ` · ${result.device}` : ''}
                   {result.eye !== 'unknown' ? ` · ${result.eye}` : ''}
                 </p>
               </div>
@@ -258,12 +246,11 @@ export default function App() {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Annotated image */}
-              {imageDataUrl && (
+            <div className={`grid gap-6 ${imageDataUrl && mode === 'ai' ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'}`}>
+              {/* Annotated image — AI mode only */}
+              {imageDataUrl && mode === 'ai' && (
                 <div className="space-y-4">
-                  <h3 className="font-semibold text-gray-800">
-                    Annotated Image
+                  <h3 className="font-semibold text-gray-800">Annotated Image
                     <span className="ml-2 text-xs font-normal text-gray-400">Hover a row to highlight</span>
                   </h3>
                   <AnnotatedCanvas
@@ -274,14 +261,13 @@ export default function App() {
                 </div>
               )}
 
-              {/* Results panels */}
               <div className="space-y-4">
                 <ResultSummary result={result} />
                 <div>
                   <h3 className="font-semibold text-gray-800 mb-3">All Parameters</h3>
                   <ParameterTable
                     parameters={result.parameters}
-                    onHover={imageDataUrl ? setHoveredParam : undefined}
+                    onHover={imageDataUrl && mode === 'ai' ? setHoveredParam : undefined}
                   />
                 </div>
               </div>
