@@ -178,16 +178,16 @@ export async function analyzeWithOCR(
   // cleartext-traffic restriction never fires (it only applies to actual network I/O).
   const tesseractBase = 'http://localhost/tesseract/';
 
-  const [workerBlob, coreBlob] = await Promise.all([
-    fetch(tesseractBase + 'worker.min.js').then((r) => r.blob()),
-    fetch(tesseractBase + 'tesseract-core.wasm.js').then((r) => r.blob()),
-  ]);
+  const workerBlob = await fetch(tesseractBase + 'worker.min.js').then((r) => r.blob());
   const workerBlobUrl = URL.createObjectURL(workerBlob);
-  const coreBlobUrl   = URL.createObjectURL(coreBlob);
+
+  // corePath must end in ".js" so Tesseract skips SIMD detection and uses this file directly.
+  // tesseract-core-lstm.wasm.js is the LSTM model without SIMD — works on all Android 7+ devices.
+  const corePath = tesseractBase + 'tesseract-core-lstm.wasm.js';
 
   const worker = await createWorker('eng', 1, {
     workerPath:  workerBlobUrl,
-    corePath:    coreBlobUrl,
+    corePath,
     langPath:    tesseractBase,
     cacheMethod: 'none' as const,
     logger: (m: { status: string; progress: number }) => {
@@ -227,7 +227,6 @@ export async function analyzeWithOCR(
   } finally {
     await worker.terminate();
     URL.revokeObjectURL(workerBlobUrl);
-    URL.revokeObjectURL(coreBlobUrl);
   }
 
   onProgress('Parsing parameters…');
