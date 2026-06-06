@@ -73,6 +73,19 @@ interface Word {
   bbox: { x0: number; y0: number; x1: number; y1: number };
 }
 
+// ── Device-specific panel layout ─────────────────────────────────────────────
+// Each device puts its numeric data table in a predictable screen region.
+// After OCR + device detection, hits outside the expected panel are rejected.
+//   Pentacam : left margin column (x 0–40 % of image width)
+//   Sirius   : right margin / centre table (x 35–100 %)
+//   Galilei  : right margin (x 40–100 %)
+// Source: "Comprehensive Guide to Corneal Topography Printouts: Pentacam & Sirius"
+const DEVICE_PANEL: Partial<Record<string, [number, number]>> = {
+  'Pentacam': [0.00, 0.42],
+  'Sirius':   [0.33, 1.00],
+  'Galilei':  [0.38, 1.00],
+};
+
 // OCR words below this confidence level are treated as noise.
 // Sirius uses red/blue colored text for K values which can drop confidence — keep threshold low.
 const MIN_CONFIDENCE = 20;
@@ -497,6 +510,16 @@ export async function analyzeWithOCR(
   else if (/galilei|ziemer/i.test(fullText))   device = 'Galilei';
   else if (/orbscan|bausch/i.test(fullText))   device = 'Orbscan';
   else if (/atlas|zeiss/i.test(fullText))      device = 'Atlas';
+
+  // Panel-region filter: remove hits whose x-centre falls outside the device's
+  // known data-table region. Eliminates false positives from colour-map labels,
+  // scale bars, and axis legends that share abbreviations with real parameters.
+  const panel = DEVICE_PANEL[device];
+  if (panel) {
+    for (const [name, d] of found) {
+      if (d.x < panel[0] || d.x > panel[1]) found.delete(name);
+    }
+  }
 
   let eye: AnalysisResult['eye'] = 'unknown';
   if (/\bod\b|right\s+eye/i.test(fullText)) eye = 'OD';
