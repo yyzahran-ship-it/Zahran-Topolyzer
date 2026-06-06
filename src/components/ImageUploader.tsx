@@ -19,8 +19,7 @@ export function ImageUploader({ onImage, disabled }: Props) {
       reader.onload = (e) => {
         const dataUrl = e.target?.result as string;
         const base64 = dataUrl.split(',')[1];
-        const previewUrl = URL.createObjectURL(file);
-        onImage(base64, mime, previewUrl);
+        onImage(base64, mime, dataUrl);
       };
       reader.readAsDataURL(file);
     },
