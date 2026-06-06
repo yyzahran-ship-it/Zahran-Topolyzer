@@ -66,18 +66,18 @@ function parseNum(raw: string): number | null {
   return isNaN(n) ? null : n;
 }
 
-// Preprocess: upscale → grayscale → box blur → Otsu threshold → auto-invert.
-// Pure black-on-white output is what Tesseract performs best on.
-// The R/G/B channels of the ImageData are reused as temporary buffers to avoid
-// extra memory allocations (important on mobile).
+// Preprocess: upscale → grayscale only.
+// We intentionally skip external binarization: Tesseract performs its own internal
+// binarization which works better on photos of printed reports. Global Otsu on a
+// photo with colourful maps produces a broken threshold that destroys text pixels.
 async function preprocessForOCR(dataUrl: string): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       const W = img.naturalWidth  || img.width  || 1;
       const H = img.naturalHeight || img.height || 1;
-      // Scale so the longer side is ~1800 px (enough for Tesseract, manageable on mobile)
-      const scale = Math.min(2.5, Math.max(1, 1800 / Math.max(W, H)));
+      // Scale so the longer side is ~2000 px — more detail for Tesseract
+      const scale = Math.min(3, Math.max(1, 2000 / Math.max(W, H)));
       const cw = Math.round(W * scale);
       const ch = Math.round(H * scale);
       const n  = cw * ch;
@@ -88,70 +88,13 @@ async function preprocessForOCR(dataUrl: string): Promise<string> {
       const ctx = canvas.getContext('2d')!;
       ctx.drawImage(img, 0, 0, cw, ch);
       const id = ctx.getImageData(0, 0, cw, ch);
-      const d  = id.data; // Uint8ClampedArray RGBA
+      const d  = id.data;
 
-      // --- Step 1: grayscale → R channel ---
+      // Grayscale only — leave binarization to Tesseract's internal algorithm
       for (let i = 0; i < n; i++) {
         const j = i * 4;
-        d[j] = Math.round(0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2]);
-      }
-
-      // --- Step 2: box blur radius 2 (H pass: R→G, V pass: G→B) ---
-      const BLR = 2;
-      // Horizontal
-      for (let y = 0; y < ch; y++) {
-        let sum = 0, cnt = 0;
-        for (let x = 0; x < cw; x++) {
-          if (x + BLR < cw)      { sum += d[(y * cw + x + BLR) * 4];         cnt++; }
-          if (x - BLR - 1 >= 0)  { sum -= d[(y * cw + x - BLR - 1) * 4];     cnt--; }
-          if (x === 0) { for (let k = 0; k <= BLR && k < cw; k++) { sum += d[(y * cw + k) * 4]; cnt++; } }
-          d[(y * cw + x) * 4 + 1] = Math.round(sum / cnt);
-        }
-      }
-      // Vertical
-      for (let x = 0; x < cw; x++) {
-        let sum = 0, cnt = 0;
-        for (let y = 0; y < ch; y++) {
-          if (y + BLR < ch)      { sum += d[((y + BLR) * cw + x) * 4 + 1];     cnt++; }
-          if (y - BLR - 1 >= 0)  { sum -= d[((y - BLR - 1) * cw + x) * 4 + 1]; cnt--; }
-          if (y === 0) { for (let k = 0; k <= BLR && k < ch; k++) { sum += d[(k * cw + x) * 4 + 1]; cnt++; } }
-          d[(y * cw + x) * 4 + 2] = Math.round(sum / cnt);
-        }
-      }
-
-      // --- Step 3: Otsu threshold on B channel ---
-      const hist = new Int32Array(256);
-      for (let i = 0; i < n; i++) hist[d[i * 4 + 2]]++;
-      let sumAll = 0;
-      for (let i = 0; i < 256; i++) sumAll += i * hist[i];
-      let sumB = 0, wB = 0, maxVar = 0, thresh = 128;
-      for (let i = 0; i < 256; i++) {
-        wB += hist[i];
-        if (!wB) continue;
-        const wF = n - wB;
-        if (!wF) break;
-        sumB += i * hist[i];
-        const mB = sumB / wB;
-        const mF = (sumAll - sumB) / wF;
-        const v  = wB * wF * (mB - mF) ** 2;
-        if (v > maxVar) { maxVar = v; thresh = i; }
-      }
-
-      // --- Step 4: binarise + auto-invert ---
-      let whiteCount = 0;
-      for (let i = 0; i < n; i++) {
-        const v = d[i * 4 + 2] > thresh ? 255 : 0;
-        const j = i * 4;
-        d[j] = d[j + 1] = d[j + 2] = v;
-        d[j + 3] = 255;
-        if (v === 255) whiteCount++;
-      }
-      // If the image is mostly dark (white text on dark BG), invert it
-      if (whiteCount < n * 0.4) {
-        for (let i = 0; i < n; i++) {
-          const j = i * 4;
-          d[j] = d[j + 1] = d[j + 2] = 255 - d[j];
-        }
+        const g = Math.round(0.299 * d[j] + 0.587 * d[j + 1] + 0.114 * d[j + 2]);
+        d[j] = d[j + 1] = d[j + 2] = g;
       }
 
       ctx.putImageData(id, 0, 0);
@@ -172,62 +115,47 @@ export async function analyzeWithOCR(
   // which goes through AppWebViewClient.shouldInterceptRequest (served from APK
   // assets, no real network request, cleartext restriction never fires).
   //
-  // Fetching inside a blob:file:// worker is unreliable on Android WebView —
-  // importScripts works for the core, but fetch() for traineddata can hang.
-  // Solution: pre-fetch everything in the main thread, then:
-  //   1. Inline the WASM core JS at the top of the worker blob (no importScripts needed)
-  //   2. Create a blob URL for traineddata and patch self.fetch inside the worker
-  //      so traineddata requests are redirected to the pre-fetched blob URL.
+  // The worker is a blob:file:// URL. importScripts from such a worker goes
+  // through shouldInterceptRequest and works. But fetch() for the 4MB traineddata
+  // can hang. Solution: pre-fetch traineddata in the main thread, store as a
+  // same-origin blob URL, then patch self.fetch/XHR in the worker to redirect
+  // any traineddata request to that blob URL.
   const tesseractBase = 'http://localhost/tesseract/';
 
-  onProgress('Downloading OCR engine…');
-  const [workerText, coreText, langBuffer] = await Promise.all([
+  onProgress('Downloading OCR assets…');
+  const [workerText, langBuffer] = await Promise.all([
     fetch(tesseractBase + 'worker.min.js').then((r) => r.text()),
-    fetch(tesseractBase + 'tesseract-core-lstm.wasm.js').then((r) => r.text()),
     fetch(tesseractBase + 'eng.traineddata').then((r) => r.arrayBuffer()),
   ]);
 
   onProgress('Preparing OCR engine…');
 
-  // Create a blob URL for the traineddata so the patched worker fetch can access it.
   const langBlobUrl = URL.createObjectURL(
     new Blob([langBuffer], { type: 'application/octet-stream' })
   );
 
-  // Build a self-contained worker script:
-  //   - core WASM JS is prepended (avoids importScripts call)
-  //   - self.fetch is patched to redirect eng.traineddata to the blob URL
-  const patchedWorker = [
-    coreText,
-    // Redirect any fetch for eng.traineddata to the pre-loaded blob URL.
-    // The blob URL is same-origin (blob:file://) so the worker can fetch it.
-    `(function(){
-  var _origFetch = self.fetch.bind(self);
-  self.fetch = function(url, opts) {
-    if (typeof url === 'string' && url.indexOf('eng.traineddata') !== -1) {
-      return _origFetch(${JSON.stringify(langBlobUrl)}, opts);
-    }
-    return _origFetch(url, opts);
+  // Prepend a tiny patch that redirects traineddata fetch/XHR to the blob URL.
+  // The blob is same-origin (blob:file://) so the worker can access it.
+  const patchCode = `(function(){
+  var _f=self.fetch.bind(self);
+  self.fetch=function(u,o){
+    if(typeof u==='string'&&u.indexOf('eng.traineddata')!==-1)return _f(${JSON.stringify(langBlobUrl)},o);
+    return _f(u,o);
   };
-  var _origXHROpen = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(method, url) {
-    var args = Array.prototype.slice.call(arguments);
-    if (typeof url === 'string' && url.indexOf('eng.traineddata') !== -1) {
-      args[1] = ${JSON.stringify(langBlobUrl)};
-    }
-    return _origXHROpen.apply(this, args);
+  var _xo=XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open=function(m,u){
+    var a=[].slice.call(arguments);
+    if(typeof u==='string'&&u.indexOf('eng.traineddata')!==-1)a[1]=${JSON.stringify(langBlobUrl)};
+    return _xo.apply(this,a);
   };
-})();`,
-    workerText,
-  ].join('\n');
+})();\n`;
 
   const workerBlobUrl = URL.createObjectURL(
-    new Blob([patchedWorker], { type: 'application/javascript' })
+    new Blob([patchCode + workerText], { type: 'application/javascript' })
   );
 
-  // corePath must end in ".js" so Tesseract skips SIMD feature detection
-  // and uses the file directly. Since the core is already inlined in the
-  // worker blob, any URL works here — it won't be fetched again.
+  // corePath ends in ".js" → Tesseract skips SIMD detection and loads this file
+  // directly via importScripts, which works from blob:file:// workers.
   const worker = await createWorker('eng', 1, {
     workerPath:  workerBlobUrl,
     corePath:    tesseractBase + 'tesseract-core-lstm.wasm.js',
@@ -235,11 +163,11 @@ export async function analyzeWithOCR(
     cacheMethod: 'none' as const,
     logger: (m: { status: string; progress: number }) => {
       if (m.status === 'recognizing text') {
-        onProgress(`Scanning image… ${Math.round(m.progress * 100)}%`);
+        onProgress(`Scanning… ${Math.round(m.progress * 100)}%`);
       } else if (m.status === 'loading tesseract core') {
         onProgress('Loading OCR engine…');
       } else if (m.status === 'loading language traineddata') {
-        onProgress('Loading OCR language data…');
+        onProgress('Loading language model…');
       } else if (m.status === 'initializing tesseract') {
         onProgress('Initializing OCR…');
       }
