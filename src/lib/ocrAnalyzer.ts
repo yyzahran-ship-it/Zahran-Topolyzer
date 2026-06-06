@@ -158,6 +158,17 @@ export async function analyzeWithOCR(
   onProgress('Preprocessing image…');
   const processedUrl = await preprocessForOCR(imageDataUrl);
 
+  // Convert to raw JPEG/PNG bytes before sending to the worker.
+  // Passing a data: URL string forces the worker to fetch/decode it using
+  // createImageBitmap or OffscreenCanvas — both can silently fail in Android
+  // WebView workers, returning a blank image that yields 0 words.
+  // Passing Uint8Array gives Leptonica (inside the WASM) the raw compressed
+  // bytes to decode natively, bypassing all browser image API issues.
+  const b64 = processedUrl.slice(processedUrl.indexOf(',') + 1);
+  const binaryStr = atob(b64);
+  const imgBytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) imgBytes[i] = binaryStr.charCodeAt(i);
+
   onProgress('Running OCR…');
 
   let words: Word[] = [];
@@ -165,7 +176,8 @@ export async function analyzeWithOCR(
   let imgHeight = 1;
 
   try {
-    const { data } = await worker.recognize(processedUrl);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await worker.recognize(imgBytes as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const page = data as any;
     words = (page.words ?? []) as Word[];
