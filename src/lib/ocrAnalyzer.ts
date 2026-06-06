@@ -263,6 +263,26 @@ export async function analyzeWithOCR(
 
   onProgress('Parsing parameters…');
 
+  // Remove isolated words — phantom OCR reads in blank paper areas and dark
+  // photo borders are always isolated (no neighbouring text around them).
+  // Real text on a medical report is always surrounded by other words.
+  // We keep imgWidth/imgHeight unchanged so pixel→fraction mapping stays correct.
+  if (words.length > 4) {
+    words = words.filter(w => {
+      const cy = (w.bbox.y0 + w.bbox.y1) / 2;
+      const cx = (w.bbox.x0 + w.bbox.x1) / 2;
+      let neighbours = 0;
+      for (const other of words) {           // 'words' still the original array here
+        if (other === w) continue;
+        if (Math.abs((other.bbox.y0 + other.bbox.y1) / 2 - cy) < imgHeight * 0.08 &&
+            Math.abs((other.bbox.x0 + other.bbox.x1) / 2 - cx) < imgWidth  * 0.35) {
+          if (++neighbours >= 2) return true; // enough neighbours → keep
+        }
+      }
+      return false; // isolated → discard
+    });
+  }
+
   // Group words into lines by Y-centre proximity (1.5% of image height)
   const lineThreshold = imgHeight * 0.015;
   const lines: Word[][] = [];
