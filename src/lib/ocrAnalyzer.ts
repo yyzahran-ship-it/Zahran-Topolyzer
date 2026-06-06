@@ -47,6 +47,9 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /corneal\s*vol/i,                                       name: 'Corneal Volume',      unit: 'mm³' },
   { regex: /q[.\s]?val|aspherici?ty|\bq\s*=/i,                    name: 'Q value',             unit: ''    },
   { regex: /hoa\s*rms|total\s*hoa/i,                              name: 'HOA RMS',             unit: 'µm'  },
+  { regex: /\bcoma\b(?!\s*aberr?\b.*\bfree)/i,                   name: 'Coma',                unit: 'µm'  },
+  { regex: /\btrefoil\b/i,                                        name: 'Trefoil',             unit: 'µm'  },
+  { regex: /spherical\s*ab(err?)?|spher\.\s*ab|z4_0|z\s*4\s*0/i, name: 'Spherical Aberration', unit: 'µm' },
   { regex: /\bs\.?\s*i\.?\s*f\b|si\s*-?\s*f\b/i,                 name: 'SIf',                 unit: 'D'   },
   { regex: /\bs\.?\s*i\.?\s*b\b|si\s*-?\s*b\b/i,                 name: 'SIb',                 unit: 'D'   },
   { regex: /\bd\.?\s*s\.?\s*i\b/i,                                name: 'DSI',                 unit: ''    },
@@ -94,6 +97,7 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'KISA%': [0, 2000], 'SRAX': [0, 360], 'SAI': [0, 10], 'SRI': [0, 10],
   'WTW': [8, 16], 'ACD': [1, 6], 'Corneal Volume': [20, 130],
   'Astigmatism': [-15, 15], 'Q value': [-3, 1], 'HOA RMS': [0, 10],
+  'Coma': [0, 5], 'Trefoil': [0, 5], 'Spherical Aberration': [-2, 2],
   'I-S value': [-20, 20], 'LSA': [0, 10],
 };
 
