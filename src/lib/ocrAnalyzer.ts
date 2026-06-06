@@ -92,17 +92,48 @@ export async function analyzeWithOCR(
   imageDataUrl: string,
   onProgress: (msg: string) => void
 ): Promise<AnalysisResult> {
-  // Page origin is http://localhost/ (set via loadDataWithBaseURL in MainActivity).
-  // Workers are therefore blob:http://localhost/ and can freely fetch
-  // http://localhost/tesseract/* — all served by shouldInterceptRequest from APK assets.
+  // Page origin: http://localhost/ (via loadDataWithBaseURL in MainActivity).
+  // Workers are blob:http://localhost/ — same origin as the page.
+  //
+  // What works:
+  //   importScripts(http://localhost/...) from worker → intercepted by shouldInterceptRequest ✓
+  //   fetch(blob:http://localhost/UUID) from worker  → internal browser, no network needed ✓
+  //   fetch(http://localhost/...) from main thread   → intercepted by shouldInterceptRequest ✓
+  //
+  // What doesn't work:
+  //   fetch(http://localhost/...) from worker        → bypasses shouldInterceptRequest on this device ✗
+  //
+  // Strategy: pre-fetch eng.traineddata in the main thread, store as a blob URL.
+  // Inject a tiny patch at the top of the worker that redirects .traineddata
+  // fetch/XHR to that blob URL — eliminating the need for any worker http:// fetch.
   const tesseractBase = 'http://localhost/tesseract/';
 
-  onProgress('Loading OCR model…');
+  onProgress('Downloading language model…');
+  const [workerText, langBuffer] = await Promise.all([
+    fetch(tesseractBase + 'worker.min.js').then((r) => r.text()),
+    fetch(tesseractBase + 'eng.traineddata').then((r) => r.arrayBuffer()),
+  ]);
+
+  onProgress('Preparing OCR engine…');
+
+  // blob:http://localhost/UUID — same origin as the worker → fetchable internally ✓
+  const langBlobUrl = URL.createObjectURL(
+    new Blob([langBuffer], { type: 'application/octet-stream' })
+  );
+
+  // Tiny patch: redirect any .traineddata fetch/XHR to the pre-loaded blob URL.
+  // Core still loads via importScripts(corePath) which IS intercepted ✓
+  const patch = `(function(){var D=${JSON.stringify(langBlobUrl)};var _f=self.fetch.bind(self);self.fetch=function(u,o){return(typeof u==='string'&&u.indexOf('.traineddata')!==-1)?_f(D,o):_f(u,o);};var _x=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var a=[].slice.call(arguments);if(typeof u==='string'&&u.indexOf('.traineddata')!==-1)a[1]=D;return _x.apply(this,a);};})();\n`;
+
+  // Worker blob: patch (~300 B) + worker.min.js (109 KB) — much lighter than v2.4's 9 MB
+  const workerBlobUrl = URL.createObjectURL(
+    new Blob([patch, workerText], { type: 'application/javascript' })
+  );
 
   const worker = await createWorker('eng', 1, {
-    workerPath:  tesseractBase + 'worker.min.js',
-    corePath:    tesseractBase + 'tesseract-core-lstm.wasm.js',
-    langPath:    tesseractBase,
+    workerPath:  workerBlobUrl,
+    corePath:    tesseractBase + 'tesseract-core-lstm.wasm.js', // importScripts ✓
+    langPath:    tesseractBase,                                  // redirected by patch ✓
     cacheMethod: 'none' as const,
     logger: (m: { status: string; progress: number }) => {
       if (m.status === 'recognizing text') {
@@ -144,6 +175,8 @@ export async function analyzeWithOCR(
     }
   } finally {
     await worker.terminate();
+    URL.revokeObjectURL(workerBlobUrl);
+    URL.revokeObjectURL(langBlobUrl);
   }
 
   onProgress('Parsing parameters…');
