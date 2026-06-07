@@ -235,9 +235,13 @@ const EXCLUDED_VALUES: Partial<Record<string, Set<number>>> = {
 // Pentacam-style KI, CKI, IHD, IHA, PRFI, or BAD-D indices.
 // Including them would produce false positives from incidental text on Sirius printouts.
 const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
-  // Sirius: Q value IS present in the right panel (bottom of SimK block, per Sirius spec).
-  // Left-panel false positives are prevented by requiring x > 0.45 in PARAM_SITES below.
-  'Sirius': new Set(['KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin',
+  // Sirius: K1/K2/Km labels appear in the multi-zone K readings table (center panel, multiple
+  // rows for Sim-k, Ø=3mm, Ø=5mm, Ø=7mm). OCR row grouping puts the K1 label at the wrong y
+  // (e.g. at the Cyl row), and the multi-zone table is not spatially separable. The Sirius right
+  // summary panel labels its K readings as SimK1/SimK2 — those are already captured by the
+  // SimK1/SimK2 parameters with correct spatial filtering. Block K1/K2/Km for Sirius.
+  'Sirius': new Set(['K1', 'K2', 'Km',
+                     'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin',
                      'CLMIaa', 'KPI', 'PPK',
                      'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
   // Pentacam: no Sirius BCV/KV/SI indices or Surface RMS; no Galilei/Orbscan specifics.
