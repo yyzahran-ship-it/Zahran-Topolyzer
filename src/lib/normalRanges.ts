@@ -695,6 +695,64 @@ export const normalRanges: Record<string, NormalRange> = {
     displayRange: '100 – 250 mm³',
   },
 
+  // ── Eccentricity (shape factor) ──────────────────────────────────────────
+  // Normal prolate cornea: e ≈ 0.4–0.6. KC → e > 0.8 (increasingly prolate).
+  eccentricity: {
+    displayName: 'Eccentricity (e)',
+    unit: '',
+    normalMin: 0.25,
+    normalMax: 0.65,
+    borderlineHigh: 0.80,
+    displayRange: '0.25 – 0.65',
+  },
+
+  // ── Anterior Chamber Angle ────────────────────────────────────────────────
+  // Normal: > 30°. Narrow angle: 20–30° (borderline). Closed: < 20°.
+  'ac angle': {
+    displayName: 'AC Angle',
+    unit: '°',
+    normalMin: 30,
+    borderlineLow: 20,
+    displayRange: '> 30°',
+    higherIsBetter: true,
+  },
+
+  // ── Galilei Box 3E: KC probability indices ────────────────────────────────
+  // CLMIaa: Cone Location & Magnitude Index (asymmetry component). Normal < 1.0 D.
+  clmiaa: {
+    displayName: 'CLMIaa (CLMI Asymmetry)',
+    unit: 'D',
+    normalMax: 1.0,
+    borderlineHigh: 1.5,
+    displayRange: '< 1.0 D',
+  },
+
+  // ── Orbscan Box 3B: Corneal Irregularity Indices ──────────────────────────
+  // Measure astigmatic irregularity within 3 mm and 5 mm zones.
+  // Normal: < 1.0 D (3mm), < 1.5 D (5mm). Source: Orbscan user manual.
+  'irregularity 3mm': {
+    displayName: 'Irregularity (3mm)',
+    unit: 'D',
+    normalMax: 1.0,
+    borderlineHigh: 1.5,
+    displayRange: '< 1.0 D',
+  },
+  'irregularity 5mm': {
+    displayName: 'Irregularity (5mm)',
+    unit: 'D',
+    normalMax: 1.5,
+    borderlineHigh: 2.0,
+    displayRange: '< 1.5 D',
+  },
+  // BFS Ratio: Anterior BFS / Posterior BFS. Normal < 1.21 (Orbscan screening rule).
+  'bfs ratio': {
+    displayName: 'BFS Ratio (Ant/Post)',
+    unit: '',
+    normalMax: 1.21,
+    borderlineHigh: 1.21,
+    displayRange: '< 1.21',
+  },
+
   // ── Refractive Surgery Risk ───────────────────────────────────────────────
   pta: {
     displayName: 'PTA (Percent Tissue Altered)',

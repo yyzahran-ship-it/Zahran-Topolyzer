@@ -79,8 +79,19 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /apex\s+thick(ness)?|thick(ness)?\s+(?:at\s+)?apex/i, name: 'Apex Thickness',     unit: 'µm'  },
   // Pupil Diameter from Sirius Box 2A
   { regex: /pupil\s+(diam(eter)?|size|ø|Ø)/i,                    name: 'Pupil Diameter',      unit: 'mm'  },
-  // Anterior Chamber Volume from Sirius Box 2A
-  { regex: /\ba\.?\s*c\.?\s*vol(ume)?|ant\w*\s+cham\w+\s+vol/i,  name: 'AC Volume',           unit: 'mm³' },
+  // AC Volume (Sirius "AC Volume", Pentacam "Chamber Volume", Galilei "ACV")
+  { regex: /\ba\.?\s*c\.?\s*vol(ume)?|ant\w*\s+cham\w+\s+vol|chamber\s+vol(ume)?|\bacv\b/i, name: 'AC Volume', unit: 'mm³' },
+  // ── Multi-device: Eccentricity (shape factor) + AC Angle ──────────────────
+  { regex: /\beccentricity\b|\be\s*\(\s*\d+(?:\.\d+)?\s*mm\s*\)/i, name: 'Eccentricity',       unit: ''    },
+  { regex: /\ba\.?\s*c\.?\s*angle\b|ant\w*\s+cham\w*\s+angle|mean\s+angle\b|\baqd\b/i, name: 'AC Angle', unit: '°' },
+  // ── Galilei Box 3E: KC probability indices ─────────────────────────────────
+  { regex: /\bkpi\b|k(?:eratoconus)?\s*prob\w*\s*index/i,          name: 'KPI',                 unit: '%'   },
+  { regex: /\bppk\b|pellucid.*prob|prob.*pellucid/i,                name: 'PPK',                 unit: '%'   },
+  { regex: /\bclmi(?:aa)?\b|cone\s+loc\w+\s+magn/i,                name: 'CLMIaa',              unit: 'D'   },
+  // ── Orbscan Box 3B: corneal irregularity + BFS ratio ──────────────────────
+  { regex: /irreg\w*\s*3\s*mm|3[\s.]?mm\s*irreg/i,                 name: 'Irregularity 3mm',    unit: 'D'   },
+  { regex: /irreg\w*\s*5\s*mm|5[\s.]?mm\s*irreg/i,                 name: 'Irregularity 5mm',    unit: 'D'   },
+  { regex: /bfs\s*ratio|ant\w*\s*bfs.*\/.*post\w*|post.*bfs.*ratio/i, name: 'BFS Ratio',        unit: ''    },
 ];
 
 interface Word {
@@ -99,79 +110,101 @@ const DEVICE_PANEL: Partial<Record<string, [number, number]>> = {
   'Pentacam': [0.00, 1.00],  // 4-map: K (UL), elevation (UR), pachy (LL), Kmax/post (LR)
   'Sirius':   [0.33, 1.00],
   'Galilei':  [0.38, 1.00],
+  'Orbscan':  [0.35, 1.00],  // data sidebar on right; 4-map body occupies left portion
 };
 
 // ── Per-parameter bounding box [xMin, xMax, yMin, yMax] per device ───────────
 // Image fractions (0–1). Generous ±12 % margins tolerate crops and firmware variants.
 //
-// Pentacam 4-Map Refractive (confirmed layout from Oculus reference guide):
-//   Upper-left  quadrant (x 0–58%, y 8–62%): K1, K2, Km, Astigmatism — axial map panel
-//   Upper-right quadrant (x 40–100%, y 8–62%): Anterior elevation, Q-value
-//   Lower-left  quadrant (x 0–58%, y 52–97%): CCT, Thinnest Point, Pachymetry
-//   Lower-right quadrant (x 40–100%, y 8–97%): Kmax, Posterior elevation
-//   BAD/Topometric display (separate screen, full width): BAD-D, ART-Max, ISV, IVA …
+// Pentacam 4-Map Refractive (Oculus):
+//   Upper-left  (x 0–58%, y 8–62%): K1, K2, Km, Astigmatism, Q value, Eccentricity (Box 2B)
+//   Upper-left  (x 0–58%, y 30–65%): K1 back, Q Post, Eccentricity back (Box 2C)
+//   Lower-left  (x 0–58%, y 52–97%): CCT, Thinnest Point, Apex Thickness, Corneal Volume,
+//                                      Chamber Volume (= AC Volume), ACD, AC Angle (Box 2D)
+//   Upper-right (x 40–100%, y 8–62%): Anterior Elevation, Q value (Box 2B)
+//   Lower-right (x 40–100%, y 8–97%): Kmax, Posterior Elevation (lower-right)
+//   BAD/Topometric (separate screen): BAD-D, ART-Max, ISV, IVA …
 //
 // Sirius KCS — right panel (x > 33%), section stack (top → bottom):
 //   [0.03–0.45] KC indices  : KI, ARIndex
-//   [0.32–0.62] K readings  : SimK1, SimK2, Astigmatism, K1, K2
+//   [0.02–0.38] Box 2A      : Apex Curvature, Apex Thickness, Pupil Diameter, AC Volume
+//   [0.32–0.62] Box 2B K    : SimK1, SimK2, Astigmatism, K1, K2
 //   [0.24–0.55] Biometry    : WTW, ACD
-//   [0.44–0.76] Pachymetry  : CCT, Thinnest Point, Corneal Volume
-//   [0.45–0.92] KC indices  : SIf, SIb, KVf, KVb, BCVf, BCVb
+//   [0.38–0.62] Box 2C Shape: Q value, Q Post, RMS Ant, RMS Post
+//   [0.45–0.92] Box 2D KC   : SIf, SIb, KVf, KVb, BCVf, BCVb
 //   [0.68–1.00] Aberrations : HOA RMS, Coma, Trefoil, Spherical Aberration
+//
+// Galilei Refractive Report — right panel (x > 38%), section stack (top → bottom):
+//   [0.05–0.45] Box 3A SimK : SimK1, SimK2, Astigmatism, Q value, Eccentricity
+//   [0.35–0.65] Box 3B Post K: K1, K2 (posterior)
+//   [0.45–0.75] Box 3C Pachy: CCT, Thinnest Point, Corneal Volume
+//   [0.60–0.88] Box 3D Biom : WTW, ACD, AC Angle, AC Volume, Pupil Diameter
+//   [0.75–1.00] Box 3E KC   : KPI, PPK, CLMIaa, SRI, SAI, I-S value
 const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number, number, number]>>>> = {
-  // ── Pentacam upper-left: K readings (axial map panel) ──────────────────────
-  'K1':                   { Pentacam: [0.00, 0.58, 0.08, 0.62] },
-  'K2':                   { Pentacam: [0.00, 0.58, 0.08, 0.62] },
-  'Km':                   { Pentacam: [0.00, 0.58, 0.08, 0.62] },
-  'Flat K':               { Pentacam: [0.00, 0.58, 0.08, 0.62] },
-  'Steep K':              { Pentacam: [0.00, 0.58, 0.08, 0.62] },
-  'Astigmatism':          { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.33, 1.00, 0.32, 0.62] },
+  // ── Pentacam Box 2B / Galilei Box 3A: anterior K readings ─────────────────
+  'K1':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  'K2':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  'Km':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  'Flat K':  { Pentacam: [0.00, 0.58, 0.08, 0.62] },
+  'Steep K': { Pentacam: [0.00, 0.58, 0.08, 0.62] },
+  'Astigmatism': { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.33, 1.00, 0.32, 0.62], Galilei: [0.38, 1.00, 0.05, 0.65] },
   // ── Pentacam upper-right: anterior elevation + Q ───────────────────────────
-  'Anterior Elevation':   { Pentacam: [0.40, 1.00, 0.08, 0.62] },
-  // Q value: Pentacam → upper-right quad; Sirius → Box 2C (Shape Indices) above KC screening
-  'Q value':              { Pentacam: [0.40, 1.00, 0.08, 0.62], Sirius: [0.33, 1.00, 0.38, 0.62] },
-  // Pentacam Box 2C back Q value — Sirius has dedicated 'Q Post' pattern instead
-  'Q Post':               { Sirius: [0.33, 1.00, 0.38, 0.62] },
-  // ── Pentacam lower-left: pachymetry ────────────────────────────────────────
-  'CCT':                  { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76] },
-  'Thinnest Point':       { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76] },
-  'Pachymetry Min':       { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76] },
-  'ACD':                  { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.22, 0.55] },
-  'Corneal Volume':       { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76] },
+  'Anterior Elevation': { Pentacam: [0.40, 1.00, 0.08, 0.62] },
+  // Q value: Pentacam UL (Box 2B front) / Sirius Box 2C / Galilei Box 3A
+  'Q value':  { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.33, 1.00, 0.38, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  // Q Post: Pentacam Box 2C (back cornea, left column) / Sirius Box 2C
+  'Q Post':   { Pentacam: [0.00, 0.58, 0.30, 0.65], Sirius: [0.33, 1.00, 0.38, 0.62] },
+  // Eccentricity (shape factor): Pentacam Box 2B/2C, Galilei Box 3A
+  'Eccentricity': { Pentacam: [0.00, 0.58, 0.08, 0.65], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  // ── Pentacam lower-left / Galilei Box 3C: pachymetry ──────────────────────
+  'CCT':           { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76], Galilei: [0.38, 1.00, 0.45, 0.75] },
+  'Thinnest Point':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76], Galilei: [0.38, 1.00, 0.45, 0.75] },
+  'Pachymetry Min':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76] },
+  'Apex Thickness':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.05, 0.45] },
+  'Corneal Volume':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76], Galilei: [0.38, 1.00, 0.45, 0.75] },
+  // ── Biometry: ACD, WTW, AC Volume, AC Angle, Pupil Diameter ───────────────
+  'ACD':          { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.22, 0.55], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  'WTW':          { Sirius: [0.33, 1.00, 0.20, 0.55], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  'AC Volume':    { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.05, 0.45], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  'AC Angle':     { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.05, 0.45], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  'Pupil Diameter':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.02, 0.38], Galilei: [0.38, 1.00, 0.60, 0.88] },
   // ── Pentacam lower-right: Kmax + posterior elevation ───────────────────────
-  'Kmax':                 { Pentacam: [0.40, 1.00, 0.08, 0.97] },
-  'Posterior Elevation':  { Pentacam: [0.40, 1.00, 0.52, 0.97] },
-  // ── Sirius SimK section (K readings, Box 2B) ────────────────────────────────
-  'SimK1':                { Sirius: [0.33, 1.00, 0.32, 0.62] },
-  'SimK2':                { Sirius: [0.33, 1.00, 0.32, 0.62] },
+  'Kmax':               { Pentacam: [0.40, 1.00, 0.08, 0.97] },
+  'Posterior Elevation':{ Pentacam: [0.40, 1.00, 0.52, 0.97] },
+  // ── Sirius SimK (Box 2B) ────────────────────────────────────────────────────
+  'SimK1': { Sirius: [0.33, 1.00, 0.32, 0.62] },
+  'SimK2': { Sirius: [0.33, 1.00, 0.32, 0.62] },
   // ── Sirius KC indices top (KI, ARIndex) ─────────────────────────────────────
-  // x starts at 0.55: forces lookup into the KC indices column on the far right,
-  // avoiding the K-readings formula zone (x 33–55%) where "1.3375" keratometric
-  // index constants appear and would otherwise pass the KI range [0.5, 2.5].
-  'KI':                   { Sirius: [0.55, 1.00, 0.03, 0.45] },
-  'ARIndex':              { Sirius: [0.55, 1.00, 0.03, 0.45] },
-  // ── Sirius biometry (Box 2A) ─────────────────────────────────────────────────
-  'WTW':                  { Sirius: [0.33, 1.00, 0.20, 0.55] },
+  // x starts at 0.55 to avoid the K-readings formula zone where "1.3375" constants appear.
+  'KI':      { Sirius: [0.55, 1.00, 0.03, 0.45] },
+  'ARIndex': { Sirius: [0.55, 1.00, 0.03, 0.45] },
   // ── Sirius Box 2A: summary/biometry (top of right panel) ───────────────────
-  'Apex Curvature':       { Sirius: [0.33, 1.00, 0.05, 0.45] },
-  'Apex Thickness':       { Sirius: [0.33, 1.00, 0.05, 0.45] },
-  'Pupil Diameter':       { Sirius: [0.33, 1.00, 0.02, 0.38] },
-  'AC Volume':            { Sirius: [0.33, 1.00, 0.05, 0.45] },
-  // ── Sirius Box 2C: Shape Indices (RMS, below K readings) ───────────────────
-  'RMS Ant':              { Sirius: [0.33, 1.00, 0.38, 0.65] },
-  'RMS Post':             { Sirius: [0.33, 1.00, 0.38, 0.65] },
-  // ── Sirius KC indices lower section (Box 2D) ─────────────────────────────────
-  'SIf':                  { Sirius: [0.33, 1.00, 0.45, 0.92] },
-  'SIb':                  { Sirius: [0.33, 1.00, 0.45, 0.92] },
-  'KVf':                  { Sirius: [0.33, 1.00, 0.45, 0.92] },
-  'KVb':                  { Sirius: [0.33, 1.00, 0.45, 0.92] },
-  'BCVf':                 { Sirius: [0.33, 1.00, 0.45, 0.92] },
-  'BCVb':                 { Sirius: [0.33, 1.00, 0.45, 0.92] },
-  // ── Sirius aberrations section (bottom of right panel) ──────────────────────
-  'HOA RMS':              { Sirius: [0.33, 1.00, 0.68, 1.00] },
-  'Coma':                 { Sirius: [0.33, 1.00, 0.68, 1.00] },
-  'Trefoil':              { Sirius: [0.33, 1.00, 0.68, 1.00] },
-  'Spherical Aberration': { Sirius: [0.33, 1.00, 0.68, 1.00] },
+  'Apex Curvature': { Sirius: [0.33, 1.00, 0.05, 0.45] },
+  // ── Sirius Box 2C: Shape Indices (Q, RMS, below K readings) ────────────────
+  'RMS Ant':  { Sirius: [0.33, 1.00, 0.38, 0.65] },
+  'RMS Post': { Sirius: [0.33, 1.00, 0.38, 0.65] },
+  // ── Sirius Box 2D: KC screening indices ─────────────────────────────────────
+  'SIf':  { Sirius: [0.33, 1.00, 0.45, 0.92] },
+  'SIb':  { Sirius: [0.33, 1.00, 0.45, 0.92] },
+  'KVf':  { Sirius: [0.33, 1.00, 0.45, 0.92] },
+  'KVb':  { Sirius: [0.33, 1.00, 0.45, 0.92] },
+  'BCVf': { Sirius: [0.33, 1.00, 0.45, 0.92] },
+  'BCVb': { Sirius: [0.33, 1.00, 0.45, 0.92] },
+  // ── Sirius aberrations section ──────────────────────────────────────────────
+  'HOA RMS':            { Sirius: [0.33, 1.00, 0.68, 1.00] },
+  'Coma':               { Sirius: [0.33, 1.00, 0.68, 1.00] },
+  'Trefoil':            { Sirius: [0.33, 1.00, 0.68, 1.00] },
+  'Spherical Aberration':{ Sirius: [0.33, 1.00, 0.68, 1.00] },
+  // ── Galilei Box 3E: KC probability indices ─────────────────────────────────
+  'KPI':    { Galilei: [0.38, 1.00, 0.75, 1.00] },
+  'PPK':    { Galilei: [0.38, 1.00, 0.75, 1.00] },
+  'CLMIaa': { Galilei: [0.38, 1.00, 0.75, 1.00] },
+  'SAI':    { Galilei: [0.38, 1.00, 0.75, 1.00] },
+  'SRI':    { Galilei: [0.38, 1.00, 0.75, 1.00] },
+  // ── Orbscan Box 3B: irregularity + BFS ratio (broad — no device map available) ─
+  'Irregularity 3mm': { Orbscan: [0.30, 1.00, 0.20, 0.80] },
+  'Irregularity 5mm': { Orbscan: [0.30, 1.00, 0.20, 0.80] },
+  'BFS Ratio':        { Orbscan: [0.30, 1.00, 0.20, 0.80] },
   // Pentacam BAD/Topometric display is a separate screen (full-width layout).
   // No spatial restriction for BAD-D, ART-Max, ISV, IVA, CKI, etc.
 };
@@ -195,13 +228,23 @@ const EXCLUDED_VALUES: Partial<Record<string, Set<number>>> = {
 // Pentacam-style KI, CKI, IHD, IHA, PRFI, or BAD-D indices.
 // Including them would produce false positives from incidental text on Sirius printouts.
 const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
-  // Sirius does not report Pentacam-style topometric indices.
-  // Q value re-enabled for Sirius (Box 2C Shape Indices); PARAM_SITES bounds prevent left-panel reads.
-  'Sirius': new Set(['KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin']),
-  // Pentacam does not report Sirius-style BCV/KV/SI indices or its Box 2C Surface RMS.
+  // Sirius: no Pentacam topometric indices, no Galilei/Orbscan specifics.
+  'Sirius': new Set(['KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin',
+                     'CLMIaa', 'KPI', 'PPK', 'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
+  // Pentacam: no Sirius BCV/KV/SI indices or Surface RMS; no Galilei/Orbscan specifics.
+  // Q Post, AC Volume, Apex Thickness ARE valid on Pentacam (Box 2C/2D).
   'Pentacam': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
-                       'Q Post', 'RMS Ant', 'RMS Post', 'Apex Curvature', 'Apex Thickness',
-                       'AC Volume']),
+                       'RMS Ant', 'RMS Post', 'Apex Curvature',
+                       'CLMIaa', 'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
+  // Galilei: no Sirius-specific or Pentacam-specific indices; no Orbscan irregularity.
+  'Galilei': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
+                      'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA',
+                      'RMS Ant', 'RMS Post', 'Apex Curvature',
+                      'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
+  // Orbscan: no Sirius/Pentacam/Galilei indices; Irregularity/BFS Ratio are Orbscan-specific.
+  'Orbscan': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
+                      'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA',
+                      'RMS Ant', 'RMS Post', 'Apex Curvature', 'CLMIaa']),
 };
 
 // Plausible value ranges — values outside are rejected as mis-reads
@@ -226,6 +269,9 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'RMS Ant': [0, 20], 'RMS Post': [0, 20],
   'Apex Curvature': [30, 70], 'Apex Thickness': [200, 800],
   'Pupil Diameter': [1, 10], 'AC Volume': [50, 400],
+  'Eccentricity': [0, 2], 'AC Angle': [5, 60],
+  'KPI': [0, 100], 'PPK': [0, 100], 'CLMIaa': [0, 10],
+  'Irregularity 3mm': [0, 10], 'Irregularity 5mm': [0, 10], 'BFS Ratio': [0.8, 1.5],
 };
 
 // Extract numeric value from OCR'd text — tolerates units attached to digits
