@@ -257,9 +257,13 @@ function nearbyNum(
 }
 
 // Upscale to ~2000px and convert to grayscale.
-// Grayscale helps Tesseract read colored text (Sirius shows K2 in red, K1 in blue)
-// which can otherwise have lower OCR confidence on color input.
-async function preprocessForOCR(dataUrl: string): Promise<string> {
+// Returns both the processed dataUrl AND the exact canvas pixel dimensions.
+// The canvas dimensions are the ground-truth for OCR bbox fractions — do NOT
+// use max(word.bbox.x1/y1) as a proxy, because camera photos of printouts often
+// have empty desk background below/beside the paper. No words appear there, so
+// max(y1) ≈ bottom-of-printout rather than bottom-of-image, inflating all
+// y-fractions and pushing every overlay box downward by up to 2×.
+async function preprocessForOCR(dataUrl: string): Promise<{ url: string; w: number; h: number }> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
@@ -279,9 +283,13 @@ async function preprocessForOCR(dataUrl: string): Promise<string> {
         d[i] = d[i + 1] = d[i + 2] = g;
       }
       ctx.putImageData(id, 0, 0);
-      resolve(canvas.toDataURL('image/jpeg', 0.92));
+      resolve({ url: canvas.toDataURL('image/jpeg', 0.92), w: canvas.width, h: canvas.height });
     };
-    img.onerror = () => resolve(dataUrl);
+    img.onerror = () => {
+      const fallback = document.createElement('canvas');
+      fallback.width = 1; fallback.height = 1;
+      resolve({ url: dataUrl, w: 1, h: 1 });
+    };
     img.src = dataUrl;
   });
 }
@@ -337,7 +345,7 @@ export async function analyzeWithOCR(
   });
 
   onProgress('Preprocessing image…');
-  const processedUrl = await preprocessForOCR(imageDataUrl);
+  const { url: processedUrl, w: canvasW, h: canvasH } = await preprocessForOCR(imageDataUrl);
 
   const b64 = processedUrl.slice(processedUrl.indexOf(',') + 1);
   const binaryStr = atob(b64);
@@ -347,8 +355,12 @@ export async function analyzeWithOCR(
   onProgress('Running OCR…');
 
   let words: Word[] = [];
-  let imgWidth  = 1;
-  let imgHeight = 1;
+  // Use exact canvas dimensions as the coordinate space for OCR bboxes.
+  // Do NOT use max(word.bbox.x1/y1): if the printout occupies only the top portion
+  // of a camera photo, the max-word approach gives a height much smaller than the
+  // real image, inflating all y-fractions and pushing every overlay box downward.
+  let imgWidth  = canvasW;
+  let imgHeight = canvasH;
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -380,10 +392,6 @@ export async function analyzeWithOCR(
       }
     }
 
-    if (words.length > 0) {
-      imgWidth  = Math.max(...words.map((w) => w.bbox.x1), 1);
-      imgHeight = Math.max(...words.map((w) => w.bbox.y1), 1);
-    }
   } finally {
     await worker.terminate();
     URL.revokeObjectURL(workerBlobUrl);
