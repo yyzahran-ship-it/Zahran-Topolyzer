@@ -287,6 +287,38 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'Irregularity 3mm': [0, 10], 'Irregularity 5mm': [0, 10], 'BFS Ratio': [0.8, 1.5],
 };
 
+// Unit-anchored validation (inspired by OpenCV/Pytesseract reference implementation).
+// In Pass 0 ("LABEL = VALUE UNIT"), require the value token or the token immediately
+// following it to carry the expected unit. This prevents axis-angle tokens ("@ 54°"),
+// bare percentages, or other nearby numbers from being mistaken for the parameter value
+// when the true value fails RANGES and the scanner falls through to the axis.
+// The regex tests either the number word itself (unit embedded, e.g. "44.12D") or the
+// next word ("D", "µm", "mm"). An absent entry means no unit restriction for that param.
+const PARAM_UNIT_RE: Partial<Record<string, RegExp>> = {
+  'K1':    /^d$/i,  'K2':    /^d$/i,  'Kmax':   /^d$/i,  'Km':    /^d$/i,
+  'SimK1': /^d$/i,  'SimK2': /^d$/i,  'Flat K': /^d$/i,  'Steep K': /^d$/i,
+  'Astigmatism': /^d$/i,
+  'Q value': /^d$/i,  'Q Post': /^d$/i,
+  'SIf': /^d$/i,  'SIb': /^d$/i,
+  'BCVf': /^d$/i, 'BCVb': /^d$/i,
+  'KVf': /^[µuμ]?m$/i, 'KVb': /^[µuμ]?m$/i,
+  'CCT':           /^[µuμ]m|um|μm$/i,
+  'Thinnest Point':/^[µuμ]m|um|μm$/i,
+  'Pachymetry Min':/^[µuμ]m|um|μm$/i,
+  'Apex Thickness':/^[µuμ]m|um|μm$/i,
+  'ACD':           /^mm$/i,
+  'WTW':           /^mm$/i,
+  'Pupil Diameter':/^mm$/i,
+  'Corneal Volume':/^mm[³3]?$/i,
+  'AC Volume':     /^mm[³3]?$/i,
+  'HOA RMS': /^[µuμ]m|um$/i,
+  'Coma':    /^[µuμ]m|um$/i,
+  'Trefoil': /^[µuμ]m|um$/i,
+  'Spherical Aberration': /^[µuμ]m|um$/i,
+  'RMS Ant': /^[µuμ]m|um$/i,
+  'RMS Post':/^[µuμ]m|um$/i,
+};
+
 // Extract numeric value from OCR'd text — tolerates units attached to digits
 function parseNum(raw: string): number | null {
   const s = raw.replace(',', '.').replace(/[°µDmm%³]+$/i, '').replace(/^[^\d\-]+/, '');
@@ -367,12 +399,24 @@ async function preprocessForOCR(dataUrl: string): Promise<{ url: string; w: numb
       canvas.height = Math.round(H * scale);
       const ctx = canvas.getContext('2d')!;
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      // Grayscale conversion: improves OCR confidence on colored text
+      // Grayscale + adaptive binary threshold (mirrors OpenCV reference pipeline).
+      // Step 1: luminance-weighted grayscale (handles colored Sirius K-value text).
+      // Step 2: compute mean brightness, then binarise at mean+offset. Using mean
+      // rather than a fixed threshold (like cv2.threshold(img,150,...)) handles
+      // variable lighting in phone photos of printouts.
       const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const d = id.data;
+      let sum = 0;
       for (let i = 0; i < d.length; i += 4) {
         const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
         d[i] = d[i + 1] = d[i + 2] = g;
+        sum += g;
+      }
+      const mean = sum / (d.length / 4);
+      const thresh = Math.min(220, Math.max(100, mean + 20));
+      for (let i = 0; i < d.length; i += 4) {
+        const bin = d[i] >= thresh ? 255 : 0;
+        d[i] = d[i + 1] = d[i + 2] = bin;
       }
       ctx.putImageData(id, 0, 0);
       resolve({ url: canvas.toDataURL('image/jpeg', 0.92), w: canvas.width, h: canvas.height });
@@ -602,6 +646,17 @@ export async function analyzeWithOCR(
         // Reject axis-angle values: a number immediately preceded by "@" is an axis direction
         // (e.g. "K1 = -6.23 D @ 54°") — not the parameter value.
         if (idx > 0 && candidates[idx - 1].text.trim() === '@') return false;
+        // Unit-anchored validation (from Python/OpenCV reference): require the value word
+        // or the immediately following word to carry the expected unit (D, µm, mm, etc.).
+        // Axis angles (°), page numbers, and other stray numerics lack the expected unit
+        // and are rejected here. If the word itself contains the unit (e.g. "44.12D"),
+        // strip digits and test the remainder; otherwise test the next candidate word.
+        const unitRe = PARAM_UNIT_RE[pat.name];
+        if (unitRe) {
+          const embeddedUnit = w.text.replace(/[\d\.\-,\s]/g, '').trim();
+          const nextWord = idx + 1 < candidates.length ? candidates[idx + 1].text.trim() : '';
+          if (!unitRe.test(embeddedUnit) && !unitRe.test(nextWord)) return false;
+        }
         return true;
       });
       if (numWord) recordHit(pat, labelWord, numWord);
