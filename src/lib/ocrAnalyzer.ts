@@ -76,14 +76,74 @@ interface Word {
 // ── Device-specific panel layout ─────────────────────────────────────────────
 // Each device puts its numeric data table in a predictable screen region.
 // After OCR + device detection, hits outside the expected panel are rejected.
-//   Pentacam : left margin column (x 0–40 % of image width)
-//   Sirius   : right margin / centre table (x 35–100 %)
-//   Galilei  : right margin (x 40–100 %)
-// Source: "Comprehensive Guide to Corneal Topography Printouts: Pentacam & Sirius"
+//   Pentacam : left margin column (x 0–42 % of image width)
+//   Sirius   : right margin / centre table (x 33–100 %)
+//   Galilei  : right margin (x 38–100 %)
+// Sources: Pentacam Interpretation Guide (Oculus, 2024); CSO Sirius Phoenix manual;
+//          "Comprehensive Guide to Corneal Topography Printouts" (uploaded reference)
 const DEVICE_PANEL: Partial<Record<string, [number, number]>> = {
   'Pentacam': [0.00, 0.42],
   'Sirius':   [0.33, 1.00],
   'Galilei':  [0.38, 1.00],
+};
+
+// ── Per-parameter expected y-range (image fraction) per device ────────────────
+// Based on the confirmed section ordering within each device's parameter panel:
+//
+// Pentacam 4-Map Refractive — LEFT COLUMN sections (top → bottom):
+//   [0.08–0.45] Cornea Front : K1, K2, Km, Kmax, Astig, Q-value
+//   [0.42–0.58] Cornea Back  : back curvature (usually not primary KC screening)
+//   [0.55–0.75] Pachymetry   : Pachy Apex / CCT, Thinnest Point
+//   [0.70–0.90] Anter.Chamber: ACD, Corneal Volume, Chamber Angle
+//   BAD / Topometric display : ISV, IVA, KI, CKI, IHA, IHD, Rmin, ART-Max, BAD-D
+//     → these appear on a separate display; y is unrestricted
+//
+// Sirius — RIGHT PANEL sections (top → bottom):
+//   [0.05–0.32] SimK table   : SimK1, SimK2, Cyl
+//   [0.28–0.50] Biometry     : HVID/WTW, Pupil Diameter, ACD
+//   [0.45–0.65] Pachymetry   : CCT, Thinnest Point, Corneal Volume
+//   [0.55–0.85] KC Indices   : SIf, SIb, KVf, KVb, BCVf, BCVb
+//   [0.78–0.98] Aberrations  : HOA RMS, Coma, Trefoil, Spherical Aberration
+//
+// Bounds are generous (±12 %) to tolerate crops and software version variation.
+const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number]>>>> = {
+  // Pentacam Cornea Front section (K readings + Q)
+  'K1':                   { Pentacam: [0.06, 0.48] },
+  'K2':                   { Pentacam: [0.06, 0.48] },
+  'Km':                   { Pentacam: [0.06, 0.48] },
+  'Kmax':                 { Pentacam: [0.06, 0.48] },
+  'SimK1':                { Pentacam: [0.06, 0.48], Sirius: [0.03, 0.35] },
+  'SimK2':                { Pentacam: [0.06, 0.48], Sirius: [0.03, 0.35] },
+  'Flat K':               { Pentacam: [0.06, 0.48] },
+  'Steep K':              { Pentacam: [0.06, 0.48] },
+  'Astigmatism':          { Pentacam: [0.06, 0.52], Sirius: [0.03, 0.35] },
+  'Q value':              { Pentacam: [0.18, 0.55] },
+  // Pentacam Pachymetry section
+  'CCT':                  { Pentacam: [0.48, 0.80], Sirius: [0.40, 0.68] },
+  'Thinnest Point':       { Pentacam: [0.48, 0.80], Sirius: [0.40, 0.68] },
+  'Pachymetry Min':       { Pentacam: [0.48, 0.80], Sirius: [0.40, 0.68] },
+  // Pentacam Anterior Chamber section
+  'ACD':                  { Pentacam: [0.64, 0.93], Sirius: [0.24, 0.52] },
+  'Corneal Volume':       { Pentacam: [0.64, 0.93], Sirius: [0.40, 0.68] },
+  // Elevation — on Pentacam left column (same block as K readings)
+  'Anterior Elevation':   { Pentacam: [0.06, 0.55] },
+  'Posterior Elevation':  { Pentacam: [0.06, 0.55] },
+  // Sirius SimK section (top of right panel)
+  'WTW':                  { Sirius: [0.24, 0.52] },
+  // Sirius KC Indices section (lower half of right panel)
+  'SIf':                  { Sirius: [0.50, 0.88] },
+  'SIb':                  { Sirius: [0.50, 0.88] },
+  'KVf':                  { Sirius: [0.50, 0.88] },
+  'KVb':                  { Sirius: [0.50, 0.88] },
+  'BCVf':                 { Sirius: [0.50, 0.88] },
+  'BCVb':                 { Sirius: [0.50, 0.88] },
+  // Sirius Aberrations section (bottom of right panel)
+  'HOA RMS':              { Sirius: [0.74, 1.00] },
+  'Coma':                 { Sirius: [0.74, 1.00] },
+  'Trefoil':              { Sirius: [0.74, 1.00] },
+  'Spherical Aberration': { Sirius: [0.74, 1.00] },
+  // Pentacam BAD / Topometric display — these appear on a separate screen.
+  // No y-restriction applied (layout is different from 4-map refractive).
 };
 
 // OCR words below this confidence level are treated as noise.
@@ -511,14 +571,25 @@ export async function analyzeWithOCR(
   else if (/orbscan|bausch/i.test(fullText))   device = 'Orbscan';
   else if (/atlas|zeiss/i.test(fullText))      device = 'Atlas';
 
-  // Panel-region filter: remove hits whose x-centre falls outside the device's
-  // known data-table region. Eliminates false positives from colour-map labels,
-  // scale bars, and axis legends that share abbreviations with real parameters.
+  // Panel-region filter (x-axis): remove hits outside the device's data-table column.
+  // Eliminates false positives from colour-map labels, scale bars, axis legends.
   const panel = DEVICE_PANEL[device];
   if (panel) {
     for (const [name, d] of found) {
       if (d.x < panel[0] || d.x > panel[1]) found.delete(name);
     }
+  }
+
+  // Section-range filter (y-axis): remove hits outside the parameter's known
+  // vertical section within the printout. Each device has a consistent stacking
+  // order (e.g. on Sirius: SimK → biometry → pachy → KC indices → aberrations).
+  // Generous bounds (±12 %) tolerate crops and software-version variation.
+  for (const [name, d] of found) {
+    const sites = PARAM_SITES[name];
+    if (!sites) continue;
+    const yBounds = sites[device];
+    if (!yBounds) continue;
+    if (d.y < yBounds[0] || d.y > yBounds[1]) found.delete(name);
   }
 
   let eye: AnalysisResult['eye'] = 'unknown';
