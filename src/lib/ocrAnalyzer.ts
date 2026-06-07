@@ -13,8 +13,8 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /sim\.?\s*k\s*1|simk1/i,                               name: 'SimK1',               unit: 'D'   },
   { regex: /sim\.?\s*k\s*2|simk2/i,                               name: 'SimK2',               unit: 'D'   },
   { regex: /\bc\.?\s*c\.?\s*t\b|central\s*corneal\s*thick/i,      name: 'CCT',                 unit: 'µm'  },
-  // Sirius uses "Thk = X µm" on the same line as the thickness value
-  { regex: /thinn?e?s?t?\s*(p?o?i?n?t?|loc\w*)|\bthk\b|min\.?\s*pachy/i, name: 'Thinnest Point', unit: 'µm' },
+  // Sirius KCS labels thinnest as "Min Thickness: XXX µm"; other devices use "Thinnest" or "Thk"
+  { regex: /thinn?e?s?t?\s*(p?o?i?n?t?|loc\w*)|\bthk\b|min\.?\s*pachy|\bmin\.?\s+thick/i, name: 'Thinnest Point', unit: 'µm' },
   { regex: /ant\.?\s*el?ev|front\s*el?ev/i,                       name: 'Anterior Elevation',  unit: 'µm'  },
   { regex: /post\.?\s*el?ev|back\s*el?ev/i,                       name: 'Posterior Elevation', unit: 'µm'  },
   // Sirius KC elevation indices — KVf/KVb appear in the KC Indices panel as "KVf = X µm"
@@ -128,8 +128,11 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   'SimK1':                { Sirius: [0.33, 1.00, 0.32, 0.62] },
   'SimK2':                { Sirius: [0.33, 1.00, 0.32, 0.62] },
   // ── Sirius KC indices top (KI, ARIndex) ─────────────────────────────────────
-  'KI':                   { Sirius: [0.33, 1.00, 0.03, 0.45] },
-  'ARIndex':              { Sirius: [0.33, 1.00, 0.03, 0.45] },
+  // x starts at 0.55: forces lookup into the KC indices column on the far right,
+  // avoiding the K-readings formula zone (x 33–55%) where "1.3375" keratometric
+  // index constants appear and would otherwise pass the KI range [0.5, 2.5].
+  'KI':                   { Sirius: [0.55, 1.00, 0.03, 0.45] },
+  'ARIndex':              { Sirius: [0.55, 1.00, 0.03, 0.45] },
   // ── Sirius biometry ─────────────────────────────────────────────────────────
   'WTW':                  { Sirius: [0.33, 1.00, 0.20, 0.55] },
   // ── Sirius KC indices lower section ─────────────────────────────────────────
@@ -154,6 +157,13 @@ const MIN_CONFIDENCE = 20;
 // Label words (the ones matching parameter name regex) must be higher confidence
 // to avoid phantom matches from photo borders, shadows, or paper bleed-through.
 const LABEL_MIN_CONFIDENCE = 50;
+
+// Values that must NEVER be accepted for a given parameter, even if inside RANGES.
+// Keratometric index constants (1.3375, 1.336, 1.376) are printed verbatim on K-readings
+// panels of Sirius / Pentacam reports and would otherwise pass the KI range [0.5, 2.5].
+const EXCLUDED_VALUES: Partial<Record<string, Set<number>>> = {
+  'KI': new Set([1.3375, 1.3315, 1.336, 1.376]),
+};
 
 // Plausible value ranges — values outside are rejected as mis-reads
 const RANGES: Partial<Record<string, [number, number]>> = {
@@ -207,7 +217,10 @@ function nearbyNum(
     const n = parseNum(w.text);
     if (n === null) return false;
     const rng = patName ? RANGES[patName] : undefined;
-    return !rng || (n >= rng[0] && n <= rng[1]);
+    if (rng && (n < rng[0] || n > rng[1])) return false;
+    const excl = patName ? EXCLUDED_VALUES[patName] : undefined;
+    if (excl && excl.has(n)) return false;
+    return true;
   }
 
   // Tier 1: same row, to the right
@@ -417,6 +430,8 @@ export async function analyzeWithOCR(
     if (value === null) return;
     const rng = RANGES[pat.name];
     if (rng && (value < rng[0] || value > rng[1])) return;
+    const excl = EXCLUDED_VALUES[pat.name];
+    if (excl && excl.has(value)) return;
 
     const lCy = (labelWord.bbox.y0 + labelWord.bbox.y1) / 2;
     const nCy = (numWord.bbox.y0 + numWord.bbox.y1) / 2;
