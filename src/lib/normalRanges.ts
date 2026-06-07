@@ -158,33 +158,35 @@ export const normalRanges: Record<string, NormalRange> = {
   },
 
   // ── Elevation (BFS) ───────────────────────────────────────────────────────
+  // Elevation thresholds per corneal-topography-reader reference (Belin 2013, Saad 2010)
   'anterior elevation': {
     displayName: 'Anterior Elevation (BFS, 8 mm)',
     unit: 'µm',
     normalMax: 12,
-    borderlineHigh: 15,
+    borderlineHigh: 16,
     displayRange: '≤ +12 µm',
   },
   'front elevation': {
     displayName: 'Front Elevation (BFS)',
     unit: 'µm',
     normalMax: 12,
-    borderlineHigh: 15,
+    borderlineHigh: 16,
     displayRange: '≤ +12 µm',
   },
+  // Posterior elevation is the most sensitive early KC marker
   'posterior elevation': {
     displayName: 'Posterior Elevation (BFS, 8 mm)',
     unit: 'µm',
-    normalMax: 17,
-    borderlineHigh: 20,
-    displayRange: '≤ +17 µm',
+    normalMax: 15,
+    borderlineHigh: 22,
+    displayRange: '≤ +15 µm',
   },
   'back elevation': {
     displayName: 'Back Elevation (BFS)',
     unit: 'µm',
-    normalMax: 17,
-    borderlineHigh: 20,
-    displayRange: '≤ +17 µm',
+    normalMax: 15,
+    borderlineHigh: 22,
+    displayRange: '≤ +15 µm',
   },
   // Elevation — Best Fit Toric Ellipsoid (BFTE)
   'anterior elevation bfte': {
@@ -233,20 +235,22 @@ export const normalRanges: Record<string, NormalRange> = {
   },
 
   // Ambrósio Relational Thickness (ART) — higher = better/normal
+  // Cutoff 304 µm from Belin & Ambrosio ROC analysis (J Refract Surg 2011)
+  // Sensitivity 88%, specificity 92%, AUC 0.97
   artmax: {
     displayName: 'ART-Max (Ambrósio Relational Thickness)',
     unit: '',
-    normalMin: 412,
-    borderlineLow: 339,
-    displayRange: '> 412',
+    normalMin: 304,
+    borderlineLow: 260,
+    displayRange: '> 304',
     higherIsBetter: true,
   },
   'art max': {
     displayName: 'ART-Max',
     unit: '',
-    normalMin: 412,
-    borderlineLow: 339,
-    displayRange: '> 412',
+    normalMin: 304,
+    borderlineLow: 260,
+    displayRange: '> 304',
     higherIsBetter: true,
   },
   artavg: {
@@ -277,7 +281,7 @@ export const normalRanges: Record<string, NormalRange> = {
     displayName: 'KI (Keratoconus Index)',
     unit: '',
     normalMax: 1.07,
-    borderlineHigh: 1.07,
+    borderlineHigh: 1.15,
     displayRange: '< 1.07',
   },
   cki: {
@@ -465,6 +469,15 @@ export const normalRanges: Record<string, NormalRange> = {
     borderlineHigh: 1.0,
     displayRange: '< 0.5 D',
   },
+  // ARIndex — Sirius asymmetry/regularity index (right panel, below KI)
+  arindex: {
+    displayName: 'ARIndex (Asymmetry/Regularity)',
+    unit: '',
+    normalMax: 0.40,
+    borderlineHigh: 0.60,
+    displayRange: '< 0.40',
+  },
+
   // KVf / KVb — Sirius elevation indices, equivalent to Pentacam ant/post elevation max
   // Atlas §6.2: KVb is the most sensitive single Sirius KC indicator
   kvf: {
@@ -521,33 +534,34 @@ export const normalRanges: Record<string, NormalRange> = {
   },
 
   // ── Wavefront Aberrations ─────────────────────────────────────────────────
+  // Wavefront thresholds per reference (6 mm analysis zone, Saad & Gatinel 2010)
   'hoa rms': {
     displayName: 'Total HOA RMS',
-    unit: 'µm',
-    normalMax: 0.50,
-    borderlineHigh: 1.00,
-    displayRange: '< 0.50 µm',
-  },
-  hoa: {
-    displayName: 'HOA RMS',
-    unit: 'µm',
-    normalMax: 0.50,
-    borderlineHigh: 1.00,
-    displayRange: '< 0.50 µm',
-  },
-  coma: {
-    displayName: 'Coma (Vertical Z₃⁻¹)',
-    unit: 'µm',
-    normalMax: 0.30,
-    borderlineHigh: 0.60,
-    displayRange: '< 0.30 µm',
-  },
-  trefoil: {
-    displayName: 'Trefoil',
     unit: 'µm',
     normalMax: 0.30,
     borderlineHigh: 0.50,
     displayRange: '< 0.30 µm',
+  },
+  hoa: {
+    displayName: 'HOA RMS',
+    unit: 'µm',
+    normalMax: 0.30,
+    borderlineHigh: 0.50,
+    displayRange: '< 0.30 µm',
+  },
+  coma: {
+    displayName: 'Coma (Vertical Z₃⁻¹)',
+    unit: 'µm',
+    normalMax: 0.15,
+    borderlineHigh: 0.30,
+    displayRange: '< 0.15 µm',
+  },
+  trefoil: {
+    displayName: 'Trefoil',
+    unit: 'µm',
+    normalMax: 0.15,
+    borderlineHigh: 0.25,
+    displayRange: '< 0.15 µm',
   },
   'spherical aberration': {
     displayName: 'Spherical Aberration (Z₄⁰)',
