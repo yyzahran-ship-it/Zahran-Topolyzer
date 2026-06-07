@@ -367,13 +367,16 @@ function nearbyNum(
   });
   if (tier1.length) return tier1.sort((a, b) => a.bbox.x0 - b.bbox.x0)[0];
 
-  // Tier 2: one row below, similar horizontal zone
+  // Tier 2: up to 4 rows below, similar horizontal zone.
+  // Extended from 2.5→4 rowH to handle multi-line section headers like
+  // "Thinnest location\n  x=...\n  Thk = 553 µm" where the value is
+  // 2-3 rows below the section title rather than on the same line.
   const tier2 = pool.filter(w => {
     if (!valid(w)) return false;
     const cy = (w.bbox.y0 + w.bbox.y1) / 2;
     const cx = (w.bbox.x0 + w.bbox.x1) / 2;
     return cy > lCy + rowH * 0.3
-        && cy <= lCy + rowH * 2.5
+        && cy <= lCy + rowH * 4
         && cx >= label.bbox.x0 - imgW * 0.04
         && cx <= lX1 + imgW * 0.22;
   });
@@ -619,13 +622,17 @@ export async function analyzeWithOCR(
     line.slice(wi + 1, wi + 4).some(w => w.text.trim() === '=');
 
   // Pass 0: "LABEL = VALUE" — handles Sirius format "K1 = 41.56 D @ 12°"
+  // Uses MIN_CONFIDENCE (not LABEL_MIN_CONFIDENCE) for the label word because the
+  // explicit "=" guard + RANGES + PARAM_UNIT_RE already make false positives
+  // extremely unlikely. This lets abbreviated labels like "Thk" pass even when
+  // Tesseract gives them borderline confidence.
   for (const line of lines) {
     for (const pat of PARAM_PATTERNS) {
       if (found.has(pat.name)) continue;
       let labelWord: Word | undefined;
       let eqIdx = -1;
       for (let wi = 0; wi < line.length; wi++) {
-        if (!isLabel(line[wi])) continue;
+        if (line[wi].confidence < MIN_CONFIDENCE) continue;
         const joined = line.slice(wi, wi + 2).map(w => w.text).join(' ');
         if (pat.regex.test(line[wi].text) || pat.regex.test(joined)) {
           labelWord = line[wi];
