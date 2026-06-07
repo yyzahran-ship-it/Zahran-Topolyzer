@@ -45,9 +45,11 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /\bs\.?\s*r\.?\s*i\b/i,                                name: 'SRI',                 unit: ''    },
   // Sirius: HVID = horizontal visible iris diameter (same as WTW)
   { regex: /\bw\.?\s*t\.?\s*w\b|white.to.white|\bhvid\b/i,       name: 'WTW',                 unit: 'mm'  },
-  { regex: /\ba\.?\s*c\.?\s*d\b/i,                                name: 'ACD',                 unit: 'mm'  },
+  // ACD: "ACD:" / "AC Depth:" / "AC Depth (Endo):" (Sirius triple-confirmation spec)
+  { regex: /\ba\.?\s*c\.?\s*d\b|ac\s+depth(?:\s*\([^)]*\))?/i,   name: 'ACD',                 unit: 'mm'  },
   { regex: /corneal\s*vol/i,                                       name: 'Corneal Volume',      unit: 'mm³' },
-  { regex: /q[.\s]?val|aspherici?ty|\bq\s*=/i,                    name: 'Q value',             unit: ''    },
+  // Q value anchors: "Q val", "Asphericity", "Q =", "Q:" (Sirius), "Q (8mm):" (Sirius)
+  { regex: /q[.\s]?val|aspherici?ty|\bq\s*=|\bq\s*\(\s*8\s*mm\s*\)\s*:|\bq\s*:/i, name: 'Q value', unit: '' },
   { regex: /hoa\s*rms|total\s*hoa/i,                              name: 'HOA RMS',             unit: 'µm'  },
   { regex: /\bcoma\b(?!\s*aberr?\b.*\bfree)/i,                   name: 'Coma',                unit: 'µm'  },
   { regex: /\btrefoil\b/i,                                        name: 'Trefoil',             unit: 'µm'  },
@@ -151,8 +153,11 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   'Astigmatism': { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.33, 1.00, 0.32, 0.62], Galilei: [0.38, 1.00, 0.05, 0.65] },
   // ── Pentacam upper-right: anterior elevation + Q ───────────────────────────
   'Anterior Elevation': { Pentacam: [0.40, 1.00, 0.08, 0.62] },
-  // Q value: Pentacam UL (Box 2B front) / Sirius Box 2C / Galilei Box 3A
-  'Q value':  { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.33, 1.00, 0.38, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  // Q value: Pentacam UL (Box 2B front) / Sirius right panel bottom of SimK block / Galilei Box 3A
+  // Sirius xMin=0.45 (not 0.33) — left-panel "Shape Indices" Q is at x<0.33; midpoint of label+value
+  // can drift to 0.33–0.40 range and produce an elongated cross-panel box. 0.45 keeps only genuinely
+  // right-panel reads where the Q label itself is well inside the right data column.
+  'Q value':  { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.45, 1.00, 0.38, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
   // Q Post: Pentacam Box 2C (back cornea, left column) / Sirius Box 2C
   'Q Post':   { Pentacam: [0.00, 0.58, 0.30, 0.65], Sirius: [0.33, 1.00, 0.38, 0.62] },
   // Eccentricity (shape factor): Pentacam Box 2B/2C, Galilei Box 3A
@@ -230,10 +235,10 @@ const EXCLUDED_VALUES: Partial<Record<string, Set<number>>> = {
 // Pentacam-style KI, CKI, IHD, IHA, PRFI, or BAD-D indices.
 // Including them would produce false positives from incidental text on Sirius printouts.
 const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
-  // Sirius: Q values are in the left "Shape Indices" panel (x < 0.33) — not in the right column.
-  // Blocking Q value prevents the left-panel reads whose bounding box can straddle x=0.33.
+  // Sirius: Q value IS present in the right panel (bottom of SimK block, per Sirius spec).
+  // Left-panel false positives are prevented by requiring x > 0.45 in PARAM_SITES below.
   'Sirius': new Set(['KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin',
-                     'Q value', 'CLMIaa', 'KPI', 'PPK',
+                     'CLMIaa', 'KPI', 'PPK',
                      'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
   // Pentacam: no Sirius BCV/KV/SI indices or Surface RMS; no Galilei/Orbscan specifics.
   'Pentacam': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
