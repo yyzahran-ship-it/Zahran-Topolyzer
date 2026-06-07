@@ -165,6 +165,15 @@ const EXCLUDED_VALUES: Partial<Record<string, Set<number>>> = {
   'KI': new Set([1.3375, 1.3315, 1.336, 1.376]),
 };
 
+// Parameters that must NEVER appear in results for a given device.
+// Sirius uses SIf/SIb/KVf/KVb/BCVf/BCVb for KC screening — it does NOT report the
+// Pentacam-style KI, CKI, IHD, IHA, PRFI, or BAD-D indices.
+// Including them would produce false positives from incidental text on Sirius printouts.
+const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
+  'Sirius': new Set(['KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin']),
+  'Pentacam': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex']),
+};
+
 // Plausible value ranges — values outside are rejected as mis-reads
 const RANGES: Partial<Record<string, [number, number]>> = {
   'K1': [30, 65], 'K2': [30, 65], 'Kmax': [30, 70], 'Km': [30, 65],
@@ -600,6 +609,13 @@ export async function analyzeWithOCR(
     if (d.x < bounds[0] || d.x > bounds[1] || d.y < bounds[2] || d.y > bounds[3]) {
       found.delete(name);
     }
+  }
+
+  // Device-specific parameter blocklist: hard-remove indices that belong only to
+  // the other device family (Pentacam vs Sirius) to prevent cross-contamination.
+  const block = DEVICE_BLOCK[device];
+  if (block) {
+    for (const name of block) found.delete(name);
   }
 
   let eye: AnalysisResult['eye'] = 'unknown';
