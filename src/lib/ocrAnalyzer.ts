@@ -555,15 +555,6 @@ export async function analyzeWithOCR(
     );
   }
 
-  const entries = Array.from(found.entries()).map(([name, d]) => ({
-    name, value: d.value, unit: d.unit,
-    x: d.x, y: d.y,
-    // Min size ensures the box is always visible; max size prevents spanning
-    // multiple columns or wrapping around OCR bbox oddities.
-    width:  Math.min(Math.max(d.w, 0.04), 0.40),
-    height: Math.min(Math.max(d.h, 0.02), 0.06),
-  }));
-
   const fullText = words.map((w) => w.text).join(' ').toLowerCase();
   let device = 'Unknown';
   if (/pentacam|oculus/i.test(fullText))       device = 'Pentacam';
@@ -600,6 +591,15 @@ export async function analyzeWithOCR(
   if (/\bod\b|right\s+eye/i.test(fullText)) eye = 'OD';
   else if (/\bos\b|left\s+eye/i.test(fullText)) eye = 'OS';
   else if (/\bou\b/i.test(fullText)) eye = 'OU';
+
+  // Build entries AFTER all spatial filters so only passing parameters are included.
+  // (Moving this before filters caused filtered-out params to still appear as boxes.)
+  const entries = Array.from(found.entries()).map(([name, d]) => ({
+    name, value: d.value, unit: d.unit,
+    x: d.x, y: d.y,
+    width:  Math.min(Math.max(d.w, 0.04), 0.40),
+    height: Math.min(Math.max(d.h, 0.02), 0.06),
+  }));
 
   const base_result = buildResult(entries, device, eye);
   return {
