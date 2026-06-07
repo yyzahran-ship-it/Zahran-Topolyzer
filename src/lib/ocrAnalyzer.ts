@@ -144,10 +144,14 @@ const DEVICE_PANEL: Partial<Record<string, [number, number]>> = {
 //   [0.60–0.88] Box 3D Biom : WTW, ACD, AC Angle, AC Volume, Pupil Diameter
 //   [0.75–1.00] Box 3E KC   : KPI, PPK, CLMIaa, SRI, SAI, I-S value
 const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number, number, number]>>>> = {
-  // ── Pentacam Box 2B / Galilei Box 3A: anterior K readings ─────────────────
-  'K1':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
-  'K2':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
-  'Km':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  // ── Pentacam Box 2B / Sirius Box 2B / Galilei Box 3A: anterior K readings ──
+  // Sirius center K readings table (Sim-k, Ø=3mm, Ø=5mm, Ø=7mm) has K1/K2 labels at
+  // x≈0.25–0.45. The right summary panel (Box 2B) also shows K1/K2 at x>0.55.
+  // xMin=0.55 for Sirius keeps only the summary-panel read and rejects the multi-zone table
+  // whose OCR row grouping caused K1 to land at the Cyl row (v2.32 root-cause fix).
+  'K1':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Sirius: [0.55, 1.00, 0.28, 0.65], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  'K2':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Sirius: [0.55, 1.00, 0.28, 0.65], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  'Km':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Sirius: [0.55, 1.00, 0.28, 0.65], Galilei: [0.38, 1.00, 0.05, 0.45] },
   'Flat K':  { Pentacam: [0.00, 0.58, 0.08, 0.62] },
   'Steep K': { Pentacam: [0.00, 0.58, 0.08, 0.62] },
   'Astigmatism': { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.33, 1.00, 0.32, 0.62], Galilei: [0.38, 1.00, 0.05, 0.65] },
@@ -235,13 +239,9 @@ const EXCLUDED_VALUES: Partial<Record<string, Set<number>>> = {
 // Pentacam-style KI, CKI, IHD, IHA, PRFI, or BAD-D indices.
 // Including them would produce false positives from incidental text on Sirius printouts.
 const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
-  // Sirius: K1/K2/Km labels appear in the multi-zone K readings table (center panel, multiple
-  // rows for Sim-k, Ø=3mm, Ø=5mm, Ø=7mm). OCR row grouping puts the K1 label at the wrong y
-  // (e.g. at the Cyl row), and the multi-zone table is not spatially separable. The Sirius right
-  // summary panel labels its K readings as SimK1/SimK2 — those are already captured by the
-  // SimK1/SimK2 parameters with correct spatial filtering. Block K1/K2/Km for Sirius.
-  'Sirius': new Set(['K1', 'K2', 'Km',
-                     'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin',
+  // Sirius: K1/K2/Km are re-enabled but spatially restricted to the right summary panel (x>0.55)
+  // via PARAM_SITES — the center K readings table (x≈0.25–0.45) is excluded at the site level.
+  'Sirius': new Set(['KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin',
                      'CLMIaa', 'KPI', 'PPK',
                      'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
   // Pentacam: no Sirius BCV/KV/SI indices or Surface RMS; no Galilei/Orbscan specifics.
@@ -715,6 +715,16 @@ export async function analyzeWithOCR(
   const block = DEVICE_BLOCK[device];
   if (block) {
     for (const name of block) found.delete(name);
+  }
+
+  // Ensure K1 ≤ K2 (K1 = flat/lower meridian per clinical convention).
+  // If OCR picks up K1 and K2 from different rows of the multi-zone table and swaps them,
+  // this guard corrects the assignment without discarding either value.
+  const k1d = found.get('K1'), k2d = found.get('K2');
+  if (k1d && k2d && k1d.value > k2d.value) {
+    const tmp = { ...k1d };
+    found.set('K1', { ...k2d, unit: k1d.unit });
+    found.set('K2', { ...tmp, unit: k2d.unit });
   }
 
   let eye: AnalysisResult['eye'] = 'unknown';
