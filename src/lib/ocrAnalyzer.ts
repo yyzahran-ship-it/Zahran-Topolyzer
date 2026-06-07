@@ -67,6 +67,20 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /\bflat\b(?!\s*k)/i,                                   name: 'Flat K',              unit: 'D'   },
   { regex: /\bsteep\b(?!\s*k)/i,                                  name: 'Steep K',             unit: 'D'   },
   { regex: /\blsa\b/i,                                            name: 'LSA',                 unit: 'D'   },
+  // ── New Sirius Box 2C / 2E parameters ──────────────────────────────────────
+  // Q Post: posterior asphericity, distinct label from anterior Q
+  { regex: /\bq[\s.]*(post|back|posterior)\b/i,                  name: 'Q Post',              unit: ''    },
+  // Surface RMS (deviation from best-fit sphere) — Sirius Box 2C
+  { regex: /\brms\b.*\b(ant(erior)?|front)\b|\b(ant(erior)?|front)\b.*\brms\b/i, name: 'RMS Ant', unit: 'µm' },
+  { regex: /\brms\b.*\b(post(erior)?|back)\b|\b(post(erior)?|back)\b.*\brms\b/i, name: 'RMS Post', unit: 'µm' },
+  // Apex Curvature: tangential map value at geometric apex
+  { regex: /apex\s+(curv(ature)?|tang\w*|steep)|\btang\w+\s+apex/i, name: 'Apex Curvature', unit: 'D' },
+  // Apex Thickness: corneal thickness at the keratometric apex (≠ thinnest)
+  { regex: /apex\s+thick(ness)?|thick(ness)?\s+(?:at\s+)?apex/i, name: 'Apex Thickness',     unit: 'µm'  },
+  // Pupil Diameter from Sirius Box 2A
+  { regex: /pupil\s+(diam(eter)?|size|ø|Ø)/i,                    name: 'Pupil Diameter',      unit: 'mm'  },
+  // Anterior Chamber Volume from Sirius Box 2A
+  { regex: /\ba\.?\s*c\.?\s*vol(ume)?|ant\w*\s+cham\w+\s+vol/i,  name: 'AC Volume',           unit: 'mm³' },
 ];
 
 interface Word {
@@ -114,7 +128,10 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   'Astigmatism':          { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.33, 1.00, 0.32, 0.62] },
   // ── Pentacam upper-right: anterior elevation + Q ───────────────────────────
   'Anterior Elevation':   { Pentacam: [0.40, 1.00, 0.08, 0.62] },
-  'Q value':              { Pentacam: [0.40, 1.00, 0.08, 0.62] },
+  // Q value: Pentacam → upper-right quad; Sirius → Box 2C (Shape Indices) above KC screening
+  'Q value':              { Pentacam: [0.40, 1.00, 0.08, 0.62], Sirius: [0.33, 1.00, 0.38, 0.62] },
+  // Pentacam Box 2C back Q value — Sirius has dedicated 'Q Post' pattern instead
+  'Q Post':               { Sirius: [0.33, 1.00, 0.38, 0.62] },
   // ── Pentacam lower-left: pachymetry ────────────────────────────────────────
   'CCT':                  { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76] },
   'Thinnest Point':       { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76] },
@@ -124,7 +141,7 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   // ── Pentacam lower-right: Kmax + posterior elevation ───────────────────────
   'Kmax':                 { Pentacam: [0.40, 1.00, 0.08, 0.97] },
   'Posterior Elevation':  { Pentacam: [0.40, 1.00, 0.52, 0.97] },
-  // ── Sirius SimK section (top of right panel) ────────────────────────────────
+  // ── Sirius SimK section (K readings, Box 2B) ────────────────────────────────
   'SimK1':                { Sirius: [0.33, 1.00, 0.32, 0.62] },
   'SimK2':                { Sirius: [0.33, 1.00, 0.32, 0.62] },
   // ── Sirius KC indices top (KI, ARIndex) ─────────────────────────────────────
@@ -133,9 +150,17 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   // index constants appear and would otherwise pass the KI range [0.5, 2.5].
   'KI':                   { Sirius: [0.55, 1.00, 0.03, 0.45] },
   'ARIndex':              { Sirius: [0.55, 1.00, 0.03, 0.45] },
-  // ── Sirius biometry ─────────────────────────────────────────────────────────
+  // ── Sirius biometry (Box 2A) ─────────────────────────────────────────────────
   'WTW':                  { Sirius: [0.33, 1.00, 0.20, 0.55] },
-  // ── Sirius KC indices lower section ─────────────────────────────────────────
+  // ── Sirius Box 2A: summary/biometry (top of right panel) ───────────────────
+  'Apex Curvature':       { Sirius: [0.33, 1.00, 0.05, 0.45] },
+  'Apex Thickness':       { Sirius: [0.33, 1.00, 0.05, 0.45] },
+  'Pupil Diameter':       { Sirius: [0.33, 1.00, 0.02, 0.38] },
+  'AC Volume':            { Sirius: [0.33, 1.00, 0.05, 0.45] },
+  // ── Sirius Box 2C: Shape Indices (RMS, below K readings) ───────────────────
+  'RMS Ant':              { Sirius: [0.33, 1.00, 0.38, 0.65] },
+  'RMS Post':             { Sirius: [0.33, 1.00, 0.38, 0.65] },
+  // ── Sirius KC indices lower section (Box 2D) ─────────────────────────────────
   'SIf':                  { Sirius: [0.33, 1.00, 0.45, 0.92] },
   'SIb':                  { Sirius: [0.33, 1.00, 0.45, 0.92] },
   'KVf':                  { Sirius: [0.33, 1.00, 0.45, 0.92] },
@@ -170,10 +195,13 @@ const EXCLUDED_VALUES: Partial<Record<string, Set<number>>> = {
 // Pentacam-style KI, CKI, IHD, IHA, PRFI, or BAD-D indices.
 // Including them would produce false positives from incidental text on Sirius printouts.
 const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
-  // Q value is in Sirius Shape indices (left panel, x < 0.33) — it's not a KC screening metric
-  // and slips past the DEVICE_PANEL gate when the left column edge grazes 0.33 on some prints.
-  'Sirius': new Set(['KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin', 'Q value']),
-  'Pentacam': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex']),
+  // Sirius does not report Pentacam-style topometric indices.
+  // Q value re-enabled for Sirius (Box 2C Shape Indices); PARAM_SITES bounds prevent left-panel reads.
+  'Sirius': new Set(['KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin']),
+  // Pentacam does not report Sirius-style BCV/KV/SI indices or its Box 2C Surface RMS.
+  'Pentacam': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
+                       'Q Post', 'RMS Ant', 'RMS Post', 'Apex Curvature', 'Apex Thickness',
+                       'AC Volume']),
 };
 
 // Plausible value ranges — values outside are rejected as mis-reads
@@ -192,9 +220,12 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'PPI-Avg': [0, 5], 'PPI-Min': [0, 5], 'PRFI': [0, 30],
   'KISA%': [0, 2000], 'SRAX': [0, 360], 'SAI': [0, 10], 'SRI': [0, 10],
   'WTW': [8, 16], 'ACD': [1, 6], 'Corneal Volume': [20, 130],
-  'Astigmatism': [-15, 15], 'Q value': [-3, 1], 'HOA RMS': [0, 10],
-  'Coma': [0, 5], 'Trefoil': [0, 5], 'Spherical Aberration': [-2, 2],
+  'Astigmatism': [-15, 15], 'Q value': [-3, 1], 'Q Post': [-3, 1],
+  'HOA RMS': [0, 10], 'Coma': [0, 5], 'Trefoil': [0, 5], 'Spherical Aberration': [-2, 2],
   'I-S value': [-20, 20], 'LSA': [0, 10],
+  'RMS Ant': [0, 20], 'RMS Post': [0, 20],
+  'Apex Curvature': [30, 70], 'Apex Thickness': [200, 800],
+  'Pupil Diameter': [1, 10], 'AC Volume': [50, 400],
 };
 
 // Extract numeric value from OCR'd text — tolerates units attached to digits

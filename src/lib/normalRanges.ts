@@ -628,6 +628,72 @@ export const normalRanges: Record<string, NormalRange> = {
     borderlineHigh: 0.00,
     displayRange: '-0.10 to -0.40 (prolate)',
   },
+  // Posterior Q (Sirius Box 2C): more negative = more prolate = KC-like
+  // Normal posterior cornea: Q ≈ -0.30 to -0.50; steeper negative values suggest ectasia
+  'q post': {
+    displayName: 'Q Post (Posterior Asphericity)',
+    unit: '',
+    normalMin: -0.60,
+    normalMax: -0.20,
+    borderlineLow: -1.00,
+    borderlineHigh: 0.00,
+    displayRange: '-0.20 to -0.60 (prolate)',
+  },
+
+  // ── Sirius Surface RMS (Box 2C) ───────────────────────────────────────────
+  // Deviation of anterior/posterior surface from the best-fit asphero-toric surface.
+  // Source: CSO Sirius Atlas §6.2; values > 0.30 µm suggest surface irregularity.
+  'rms ant': {
+    displayName: 'RMS Ant (Surface Deviation)',
+    unit: 'µm',
+    normalMax: 0.30,
+    borderlineHigh: 0.50,
+    displayRange: '< 0.30 µm',
+  },
+  'rms post': {
+    displayName: 'RMS Post (Surface Deviation)',
+    unit: 'µm',
+    normalMax: 0.20,
+    borderlineHigh: 0.40,
+    displayRange: '< 0.20 µm',
+  },
+
+  // ── Sirius Box 2A: Apex / Curvature / Pupil ────────────────────────────────
+  // Apex Curvature: steepest point on tangential map. KC suspect if > 48 D.
+  'apex curvature': {
+    displayName: 'Apex Curvature (Tangential)',
+    unit: 'D',
+    normalMax: 48.0,
+    borderlineHigh: 52.0,
+    displayRange: '< 48.0 D',
+  },
+  // Apex Thickness: thickness at corneal apex (≠ thinnest point)
+  'apex thickness': {
+    displayName: 'Apex Thickness',
+    unit: 'µm',
+    normalMin: 510,
+    normalMax: 560,
+    borderlineLow: 480,
+    displayRange: '510 – 560 µm',
+    higherIsBetter: true,
+  },
+  // Pupil Diameter: informational (no KC-specific threshold)
+  'pupil diameter': {
+    displayName: 'Pupil Diameter',
+    unit: 'mm',
+    normalMin: 2.0,
+    normalMax: 7.0,
+    displayRange: '2.0 – 7.0 mm',
+  },
+  // AC Volume: anterior chamber volume (reduced in narrow-angle / shallow AC)
+  'ac volume': {
+    displayName: 'AC Volume',
+    unit: 'mm³',
+    normalMin: 100,
+    normalMax: 250,
+    borderlineLow: 80,
+    displayRange: '100 – 250 mm³',
+  },
 
   // ── Refractive Surgery Risk ───────────────────────────────────────────────
   pta: {
