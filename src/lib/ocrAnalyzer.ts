@@ -170,7 +170,9 @@ const EXCLUDED_VALUES: Partial<Record<string, Set<number>>> = {
 // Pentacam-style KI, CKI, IHD, IHA, PRFI, or BAD-D indices.
 // Including them would produce false positives from incidental text on Sirius printouts.
 const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
-  'Sirius': new Set(['KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin']),
+  // Q value is in Sirius Shape indices (left panel, x < 0.33) — it's not a KC screening metric
+  // and slips past the DEVICE_PANEL gate when the left column edge grazes 0.33 on some prints.
+  'Sirius': new Set(['KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin', 'Q value']),
   'Pentacam': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex']),
 };
 

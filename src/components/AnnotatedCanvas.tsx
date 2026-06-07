@@ -74,10 +74,12 @@ export function AnnotatedCanvas({ imageSrc, parameters, hoveredParam }: Props) {
         ctx.font = `bold ${fontSize}px system-ui, sans-serif`;
         const textW = ctx.measureText(label).width + 8;
         const textH = fontSize + 6;
+        const wouldOverflow = cx + bw / 2 + 2 + textW > canvas.width;
+        const lx = wouldOverflow ? cx - bw / 2 - 2 - textW : cx + bw / 2 + 2;
         ctx.fillStyle = colors.stroke;
-        ctx.fillRect(cx + bw / 2 + 2, cy - textH / 2, textW, textH);
+        ctx.fillRect(lx, cy - textH / 2, textW, textH);
         ctx.fillStyle = '#ffffff';
-        ctx.fillText(label, cx + bw / 2 + 6, cy + fontSize / 2 - 2);
+        ctx.fillText(label, lx + 4, cy + fontSize / 2 - 2);
       }
     };
     img.src = imageSrc;
