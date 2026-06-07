@@ -75,12 +75,13 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /\brms\b.*\b(post(erior)?|back)\b|\b(post(erior)?|back)\b.*\brms\b/i, name: 'RMS Post', unit: 'µm' },
   // Apex Curvature: tangential map value at geometric apex
   { regex: /apex\s+(curv(ature)?|tang\w*|steep)|\btang\w+\s+apex/i, name: 'Apex Curvature', unit: 'D' },
-  // Apex Thickness: corneal thickness at the keratometric apex (≠ thinnest)
-  { regex: /apex\s+thick(ness)?|thick(ness)?\s+(?:at\s+)?apex/i, name: 'Apex Thickness',     unit: 'µm'  },
-  // Pupil Diameter from Sirius Box 2A
-  { regex: /pupil\s+(diam(eter)?|size|ø|Ø)/i,                    name: 'Pupil Diameter',      unit: 'mm'  },
-  // AC Volume (Sirius "AC Volume", Pentacam "Chamber Volume", Galilei "ACV")
-  { regex: /\ba\.?\s*c\.?\s*vol(ume)?|ant\w*\s+cham\w+\s+vol|chamber\s+vol(ume)?|\bacv\b/i, name: 'AC Volume', unit: 'mm³' },
+  // Apex Thickness: "Apex Thickness", "Thickness at apex", or standalone "Apex:" (Sirius label)
+  // Negative lookahead excludes "Apex Curvature" / "Apex Tang" to avoid overlap with Apex Curvature.
+  { regex: /apex\s+thick(ness)?|thick(ness)?\s+(?:at\s+)?apex|\bapex\s*:(?!\s*(?:curv|tang|steep))/i, name: 'Apex Thickness', unit: 'µm' },
+  // Pupil Diameter from Sirius Box 2A — "Pupil dia.:" or "Pupil Ø:"
+  { regex: /pupil\s+(diam?(eter)?|dia\.?|size|ø|Ø)/i,            name: 'Pupil Diameter',      unit: 'mm'  },
+  // AC Volume — Sirius "Aq. Volume" / "AC Volume", Pentacam "Chamber Volume", Galilei "ACV"
+  { regex: /\ba\.?\s*c\.?\s*vol(ume)?|ant\w*\s+cham\w+\s+vol|chamber\s+vol(ume)?|\bacv\b|\baq\w*\.?\s+vol/i, name: 'AC Volume', unit: 'mm³' },
   // ── Multi-device: Eccentricity (shape factor) + AC Angle ──────────────────
   { regex: /\beccentricity\b|\be\s*\(\s*\d+(?:\.\d+)?\s*mm\s*\)/i, name: 'Eccentricity',       unit: ''    },
   { regex: /\ba\.?\s*c\.?\s*angle\b|ant\w*\s+cham\w*\s+angle|mean\s+angle\b|\baqd\b/i, name: 'AC Angle', unit: '°' },
@@ -183,13 +184,14 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   // ── Sirius Box 2C: Shape Indices (Q, RMS, below K readings) ────────────────
   'RMS Ant':  { Sirius: [0.33, 1.00, 0.38, 0.65] },
   'RMS Post': { Sirius: [0.33, 1.00, 0.38, 0.65] },
-  // ── Sirius Box 2D: KC screening indices ─────────────────────────────────────
-  'SIf':  { Sirius: [0.33, 1.00, 0.45, 0.92] },
-  'SIb':  { Sirius: [0.33, 1.00, 0.45, 0.92] },
-  'KVf':  { Sirius: [0.33, 1.00, 0.45, 0.92] },
-  'KVb':  { Sirius: [0.33, 1.00, 0.45, 0.92] },
-  'BCVf': { Sirius: [0.33, 1.00, 0.45, 0.92] },
-  'BCVb': { Sirius: [0.33, 1.00, 0.45, 0.92] },
+  // ── Sirius Box 2D: KC screening indices (below KC Screening header at y≈0.53-0.55)
+  // yMin 0.56 ensures the label matches data rows, not the section header text above.
+  'SIf':  { Sirius: [0.33, 1.00, 0.56, 0.92] },
+  'SIb':  { Sirius: [0.33, 1.00, 0.56, 0.92] },
+  'KVf':  { Sirius: [0.33, 1.00, 0.56, 0.92] },
+  'KVb':  { Sirius: [0.33, 1.00, 0.56, 0.92] },
+  'BCVf': { Sirius: [0.33, 1.00, 0.56, 0.92] },
+  'BCVb': { Sirius: [0.33, 1.00, 0.56, 0.92] },
   // ── Sirius aberrations section ──────────────────────────────────────────────
   'HOA RMS':            { Sirius: [0.33, 1.00, 0.68, 1.00] },
   'Coma':               { Sirius: [0.33, 1.00, 0.68, 1.00] },
@@ -228,11 +230,12 @@ const EXCLUDED_VALUES: Partial<Record<string, Set<number>>> = {
 // Pentacam-style KI, CKI, IHD, IHA, PRFI, or BAD-D indices.
 // Including them would produce false positives from incidental text on Sirius printouts.
 const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
-  // Sirius: no Pentacam topometric indices, no Galilei/Orbscan specifics.
+  // Sirius: Q values are in the left "Shape Indices" panel (x < 0.33) — not in the right column.
+  // Blocking Q value prevents the left-panel reads whose bounding box can straddle x=0.33.
   'Sirius': new Set(['KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin',
-                     'CLMIaa', 'KPI', 'PPK', 'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
+                     'Q value', 'CLMIaa', 'KPI', 'PPK',
+                     'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
   // Pentacam: no Sirius BCV/KV/SI indices or Surface RMS; no Galilei/Orbscan specifics.
-  // Q Post, AC Volume, Apex Thickness ARE valid on Pentacam (Box 2C/2D).
   'Pentacam': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
                        'RMS Ant', 'RMS Post', 'Apex Curvature',
                        'CLMIaa', 'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
@@ -258,7 +261,7 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'BCVf': [0, 15], 'BCVb': [0, 15],
   'ISV': [0, 300], 'IVA': [0, 3], 'KI': [0.5, 2.5], 'CKI': [0, 2], 'ARIndex': [0, 2],
   'IHA': [0, 360], 'IHD': [0, 0.5], 'Rmin': [3, 10], 'ART-Max': [0, 600],
-  'SIf': [0, 10], 'SIb': [0, 10], 'DSI': [-10, 300], 'OSI': [0, 300],
+  'SIf': [-3, 3], 'SIb': [-1.5, 1.5], 'DSI': [-10, 300], 'OSI': [0, 300],
   'CSI': [0, 300], 'IAI': [0, 300], 'AAI': [0, 300],
   'PPI-Avg': [0, 5], 'PPI-Min': [0, 5], 'PRFI': [0, 30],
   'KISA%': [0, 2000], 'SRAX': [0, 360], 'SAI': [0, 10], 'SRI': [0, 10],
