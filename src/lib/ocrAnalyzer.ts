@@ -471,38 +471,54 @@ async function preprocessForOCR(dataUrl: string): Promise<{ url: string; w: numb
         d[i] = d[i + 1] = d[i + 2] = v;
       }
 
-      // Step 3: Per-pixel adaptive threshold via integral image.
-      // Faithful port of cv2.adaptiveThreshold(gray,255,ADAPTIVE_THRESH_GAUSSIAN_C,
-      // THRESH_BINARY,11,2): for each pixel compute the mean of its 11×11 neighbourhood
-      // (halfK=5 → 11×11 window) and binarise with threshold = mean − C (C=2).
-      // Using a summed-area table (integral image) gives O(W×H) total time regardless
-      // of window size, avoiding the block-boundary artifacts of a coarse grid approach.
-      const intStride = cW + 1;
-      const integral = new Float64Array(intStride * (cH + 1));
-      for (let y = 0; y < cH; y++) {
-        for (let x = 0; x < cW; x++) {
-          integral[(y + 1) * intStride + (x + 1)] =
-            d[(y * cW + x) * 4]
-            + integral[y * intStride + (x + 1)]
-            + integral[(y + 1) * intStride + x]
-            - integral[y * intStride + x];
-        }
-      }
+      // Step 3: Per-pixel adaptive threshold — sliding column-sum approach.
+      // Equivalent to cv2.adaptiveThreshold(gray,255,ADAPTIVE_THRESH_MEAN_C,
+      // THRESH_BINARY,11,2): each pixel is thresholded against the mean of its
+      // 11×11 neighbourhood minus C=2.
+      //
+      // Uses a column-sum array (O(W) space, O(W×H) time) instead of a full
+      // integral image (which would require a ~96 MB Float64Array and can OOM
+      // the Android WebView JS heap).
+      //
+      // Algorithm:
+      //   colSum[x] = sum of pixel values in column x over the current row-window.
+      //   For each row y we slide the window down (add new bottom row, remove old
+      //   top row). Within each row we slide a running horizontal sum across colSum.
       const HALF_K = 5;   // → 11×11 window (matches Python blockSize=11)
       const C_THRESH = 2; // matches Python C=2
+      const colSum = new Float32Array(cW);
       const bin = new Uint8Array(cW * cH);
+
+      // Seed colSum with rows 0..HALF_K (the initial window for y=0)
+      for (let y2 = 0; y2 <= Math.min(HALF_K, cH - 1); y2++)
+        for (let x = 0; x < cW; x++)
+          colSum[x] += d[(y2 * cW + x) * 4];
+
       for (let y = 0; y < cH; y++) {
-        const iy0 = Math.max(0, y - HALF_K);
-        const iy1 = Math.min(cH - 1, y + HALF_K);
+        // Slide the vertical window: add new bottom row, remove departing top row
+        if (y > 0) {
+          const addRow = y + HALF_K;
+          if (addRow < cH)
+            for (let x = 0; x < cW; x++) colSum[x] += d[(addRow * cW + x) * 4];
+          const remRow = y - HALF_K - 1;
+          if (remRow >= 0)
+            for (let x = 0; x < cW; x++) colSum[x] -= d[(remRow * cW + x) * 4];
+        }
+        const rowH = Math.min(cH - 1, y + HALF_K) - Math.max(0, y - HALF_K) + 1;
+
+        // Seed the horizontal running sum for x=0
+        let hSum = 0;
+        for (let x2 = 0; x2 <= Math.min(HALF_K, cW - 1); x2++) hSum += colSum[x2];
+
         for (let x = 0; x < cW; x++) {
-          const ix0 = Math.max(0, x - HALF_K);
-          const ix1 = Math.min(cW - 1, x + HALF_K);
-          const count = (iy1 - iy0 + 1) * (ix1 - ix0 + 1);
-          const sum = integral[(iy1 + 1) * intStride + (ix1 + 1)]
-                    - integral[iy0       * intStride + (ix1 + 1)]
-                    - integral[(iy1 + 1) * intStride + ix0]
-                    + integral[iy0       * intStride + ix0];
-          bin[y * cW + x] = d[(y * cW + x) * 4] > (sum / count) - C_THRESH ? 255 : 0;
+          if (x > 0) {
+            const addCol = x + HALF_K;
+            if (addCol < cW) hSum += colSum[addCol];
+            const remCol = x - HALF_K - 1;
+            if (remCol >= 0) hSum -= colSum[remCol];
+          }
+          const colW = Math.min(cW - 1, x + HALF_K) - Math.max(0, x - HALF_K) + 1;
+          bin[y * cW + x] = d[(y * cW + x) * 4] > hSum / (rowH * colW) - C_THRESH ? 255 : 0;
         }
       }
       for (let i = 0; i < cW * cH; i++) {
