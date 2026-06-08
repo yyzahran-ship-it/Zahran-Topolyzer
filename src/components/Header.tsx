@@ -8,12 +8,13 @@ export function Header() {
             <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" />
           </svg>
         </div>
-        <div>
+        <div className="flex-1">
           <h1 className="text-xl font-bold tracking-tight">Zahran Topolyzer</h1>
           <p className="text-sky-200 text-xs">
             Corneal Topography Analyzer — Pentacam · Sirius · Galilei · Orbscan
           </p>
         </div>
+        <span className="text-sky-300 text-xs font-mono opacity-70">v2.44</span>
       </div>
     </header>
   );
