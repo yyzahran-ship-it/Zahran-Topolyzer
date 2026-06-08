@@ -144,8 +144,8 @@ const DEVICE_PANEL: Partial<Record<string, [number, number]>> = {
 //   Col C — K Readings  (x 0.48–0.75):
 //     Multiple Ø zones: K1, K2, Avg, Cyl  (K1/K2 blocked for Sirius via DEVICE_BLOCK)
 //
-//   Col C/D overlap — Sim-K rows within K readings table (x 0.40–0.70, y 0.28–0.62):
-//     Sim.K1, Sim.K2, Astigmatism (cyl)
+//   Col C — K Readings top (x 0.40–0.68, y 0.28–0.62):
+//     Sim-k section: K1, K2, Astigmatism (Cyl) — extracted via K1/K2 patterns
 //
 //   Col E — Summary Indices  (x 0.68–1.00):
 //     [y 0.40–0.58] HVID               : WTW
@@ -161,11 +161,15 @@ const DEVICE_PANEL: Partial<Record<string, [number, number]>> = {
 //   [0.60–0.88] Box 3D Biom : WTW, ACD, AC Angle, AC Volume, Pupil Diameter
 //   [0.75–1.00] Box 3E KC   : KPI, PPK, CLMIaa, SRI, SAI, I-S value
 const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number, number, number]>>>> = {
-  // ── Pentacam Box 2B / Galilei Box 3A: anterior K readings ─────────────────
-  // Sirius K1/K2/Km are blocked via DEVICE_BLOCK; no PARAM_SITES entry needed.
-  'K1':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
-  'K2':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
-  'Km':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  // ── K readings: Pentacam/Galilei + Sirius Sim-k section ─────────────────────
+  // Sirius K1/K2 come from the Sim-k row of the K readings table (first row, x=0.40-0.68,
+  // y=0.28-0.62). Posterior K values (K1≈-6 D, K2≈-7 D) occupy adjacent columns on the
+  // SAME visual rows but always fail RANGES[30,65], so no extra guard is needed beyond
+  // PARAM_SITES. The Sim-k row always appears first (top of the table) so Pass 0 records
+  // the correct Sim-k value before reaching any other "K1 =" or "K2 =" row.
+  'K1':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45], Sirius: [0.40, 0.68, 0.28, 0.62] },
+  'K2':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45], Sirius: [0.40, 0.68, 0.28, 0.62] },
+  'Km':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45], Sirius: [0.40, 0.68, 0.28, 0.62] },
   'Flat K':  { Pentacam: [0.00, 0.58, 0.08, 0.62] },
   'Steep K': { Pentacam: [0.00, 0.58, 0.08, 0.62] },
   // Sirius Astigmatism: from Cyl in K readings (Col C/D) or Refractive Analysis (Col A top).
@@ -199,11 +203,9 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   // ── Pentacam lower-right: Kmax + posterior elevation ───────────────────────
   'Kmax':               { Pentacam: [0.40, 1.00, 0.08, 0.97] },
   'Posterior Elevation':{ Pentacam: [0.40, 1.00, 0.52, 0.97] },
-  // ── Sirius Sim-K (K readings table mid-area, x=0.40-0.70, y=0.28-0.62) ──────
-  // The Sim.K1/Sim.K2 labels appear inside the K readings table at roughly the
-  // centre-left of the data panel; restrict away from the col-E summary indices.
-  'SimK1': { Sirius: [0.40, 0.70, 0.28, 0.62] },
-  'SimK2': { Sirius: [0.40, 0.70, 0.28, 0.62] },
+  // SimK1/SimK2 are DEVICE_BLOCK'd for Sirius (regex can't match "Sim-k K1" layout).
+  // Sirius Sim-k keratometry is captured via the plain K1/K2 patterns above instead.
+  // SimK1/SimK2 PARAM_SITES entries are only needed for Pentacam/Galilei if applicable.
   // ── Sirius KC Screening Col A: KI / ARIndex ──────────────────────────────────
   // KI is DEVICE_BLOCK'd for Sirius; ARIndex kept for completeness.
   'KI':      { Sirius: [0.33, 0.55, 0.00, 0.45] },
@@ -261,12 +263,12 @@ const EXCLUDED_VALUES: Partial<Record<string, Set<number>>> = {
 // Pentacam-style KI, CKI, IHD, IHA, PRFI, or BAD-D indices.
 // Including them would produce false positives from incidental text on Sirius printouts.
 const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
-  // Sirius: K1/K2/Km blocked because the center K readings table has BOTH anterior K values
-  // (K1=44.xx @ AX°) and posterior K values (K1=-6.xx @ AX°) in adjacent columns of the same
-  // visual rows. OCR merges them into single lines; Pass 0 then picks up the axis angle (e.g.
-  // "54" from "@ 54°") as K1 value when the true K value (-6.xx) fails RANGES. Sirius labels
-  // its summary-panel curvature readings as SimK1/SimK2, captured by dedicated parameters.
-  'Sirius': new Set(['K1', 'K2', 'Km',
+  // Sirius K readings: K1/K2/Km are now NOT blocked — the Sim-k section in the K readings
+  // table uses plain "K1" / "K2" row labels. RANGES[30,65] already rejects the adjacent
+  // posterior K values (K1=-6.xx D, K2=-7.xx D), and PARAM_SITES further gates them to the
+  // Sim-k y-band. SimK1/SimK2 ARE blocked because their regex (/sim\.?k1/) can never match
+  // Sirius's "Sim-k + K1-row" two-line layout — blocking avoids spurious hits elsewhere.
+  'Sirius': new Set(['SimK1', 'SimK2',
                      'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin',
                      'CLMIaa', 'KPI', 'PPK',
                      'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
@@ -776,8 +778,11 @@ export async function analyzeWithOCR(
   const fullText = words.map((w) => w.text).join(' ').toLowerCase();
   let device = 'Unknown';
   if (/pentacam|oculus/i.test(fullText))       device = 'Pentacam';
-  // Sirius-specific labels: KVf, KVb, BCVf, BCVb — only found on CSO Sirius reports
-  else if (/sirius|cso|\bkvf\b|\bkv[bf]\b|\bbcv[fb]\b/i.test(fullText)) device = 'Sirius';
+  // Sirius identifiers: brand text, KC screening labels (KVf/BCVf), K readings table
+  // markers (n1=1.3375 keratometric index, Sim-k section header, Coverage(SC.) metric).
+  // Multiple fallbacks ensure detection works even when only the K readings panel is
+  // photographed (no KC Screening section visible → no KVf/BCVf text).
+  else if (/sirius|cso|\bkvf\b|\bkv[bf]\b|\bbcv[fb]\b|1\.3375|\bsim[\-\.]k\b|coverage\s*\(\s*sc/i.test(fullText)) device = 'Sirius';
   else if (/galilei|ziemer/i.test(fullText))   device = 'Galilei';
   else if (/orbscan|bausch/i.test(fullText))   device = 'Orbscan';
   else if (/atlas|zeiss/i.test(fullText))      device = 'Atlas';
