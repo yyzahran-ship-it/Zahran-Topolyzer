@@ -543,16 +543,26 @@ export async function analyzeWithOCR(
           // With PSM-3, line segmentation is reliable: all words on the same visual row share
           // the same line bbox, eliminating per-word y-drift that caused boxes to land on
           // the wrong row.
+          //
+          // Exception: when Tesseract merges two adjacent visual rows into one OCR line
+          // (which happens in densely-spaced sections like Sirius Shape Indices), the merged
+          // line bbox spans both rows. If we apply the y-override there, all words get the
+          // same mid-point y and the box lands between rows. Guard: only override when the
+          // line height is < 4 % of image height (≈ single row). For taller merged lines,
+          // fall back to per-word bboxes so the y-grouping code correctly separates the rows.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const lel = line as any;
           const lineY0: number | undefined = lel.bbox?.y0;
           const lineY1: number | undefined = lel.bbox?.y1;
+          const singleRowLine =
+            lineY0 !== undefined && lineY1 !== undefined &&
+            (lineY1 - lineY0) < imgHeight * 0.04;
           for (const word of (line.words ?? [])) {
             const w = word as Word;
             if (w.confidence >= MIN_CONFIDENCE) {
-              words.push(lineY0 !== undefined && lineY1 !== undefined ? {
+              words.push(singleRowLine ? {
                 ...w,
-                bbox: { x0: w.bbox.x0, y0: lineY0, x1: w.bbox.x1, y1: lineY1 },
+                bbox: { x0: w.bbox.x0, y0: lineY0!, x1: w.bbox.x1, y1: lineY1! },
               } : w);
             }
           }
