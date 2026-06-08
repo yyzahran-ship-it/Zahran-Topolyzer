@@ -76,8 +76,12 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   // Q Post: posterior asphericity, distinct label from anterior Q
   { regex: /\bq[\s.]*(post|back|posterior)\b/i,                  name: 'Q Post',              unit: ''    },
   // Surface RMS (deviation from best-fit sphere) — Sirius Box 2C
-  { regex: /\brms\b.*\b(ant(erior)?|front)\b|\b(ant(erior)?|front)\b.*\brms\b/i, name: 'RMS Ant', unit: 'µm' },
-  { regex: /\brms\b.*\b(post(erior)?|back)\b|\b(post(erior)?|back)\b.*\brms\b/i, name: 'RMS Post', unit: 'µm' },
+  // "RMS/A" is the Sirius label (no "ant"/"post" qualifier); PARAM_SITES y-range separates them.
+  { regex: /\brms\b.*\b(ant(erior)?|front)\b|\b(ant(erior)?|front)\b.*\brms\b|\brms\s*\/\s*a\b/i, name: 'RMS Ant', unit: 'µm' },
+  { regex: /\brms\b.*\b(post(erior)?|back)\b|\b(post(erior)?|back)\b.*\brms\b|\brms\s*\/\s*a\b/i, name: 'RMS Post', unit: 'µm' },
+  // rf / rs: flat and steep radii of curvature in Sirius Shape Indices (anterior section, in D)
+  { regex: /\brf\b/i,                                               name: 'Flat Radius',         unit: 'D'   },
+  { regex: /\brs\b/i,                                               name: 'Steep Radius',        unit: 'D'   },
   // Apex Curvature: tangential map value at geometric apex
   { regex: /apex\s+(curv(ature)?|tang\w*|steep)|\btang\w+\s+apex/i, name: 'Apex Curvature', unit: 'D' },
   // Apex Thickness: "Apex Thickness", "Thickness at apex", or standalone "Apex:" (Sirius label)
@@ -181,6 +185,10 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   'MPP': { Sirius: [0.52, 0.85, 0.00, 0.30] },
   // ── Pentacam upper-right: anterior elevation + Q ───────────────────────────
   'Anterior Elevation': { Pentacam: [0.40, 1.00, 0.08, 0.62] },
+  // rf / rs: Sirius Shape Indices Col B, anterior section (top rows, above Q value).
+  // RANGES [30,70] rejects posterior surface values (~-6 to -7 D), no extra posterior guard needed.
+  'Flat Radius':  { Sirius: [0.40, 0.68, 0.00, 0.38] },
+  'Steep Radius': { Sirius: [0.40, 0.68, 0.00, 0.38] },
   // Q value: Pentacam UL Box 2B / Sirius Shape Indices Col B (anterior) / Galilei Box 3A.
   // Sirius xMin=0.40 targets Col B Shape Indices where the asphericity value lives.
   // The "Q = 4.5mm" zone label in Col A Refractive Analysis reads as 4.5 → fails RANGES[-3,3].
@@ -312,6 +320,7 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'HOA RMS': [0, 10], 'Coma': [0, 5], 'Trefoil': [0, 5], 'Spherical Aberration': [-2, 2],
   'I-S value': [-20, 20], 'LSA': [0, 10], 'MPP': [35, 55],
   'RMS Ant': [0, 20], 'RMS Post': [0, 20],
+  'Flat Radius': [30, 70], 'Steep Radius': [30, 70],
   'Apex Curvature': [30, 70], 'Apex Thickness': [200, 800],
   'Pupil Diameter': [1, 10], 'AC Volume': [50, 400],
   'Eccentricity': [0, 2], 'AC Angle': [5, 60],
@@ -334,6 +343,7 @@ const PARAM_UNIT_RE: Partial<Record<string, RegExp>> = {
   // allows Pass 0 to find "Q = 1.21" directly; otherwise the /^d$/i check blocks Pass 0
   // and forces Pass 1/2 where "Q" may land on a merged OCR line (wrong box position).
   'MPP': /^d$/i,
+  'Flat Radius': /^d$/i, 'Steep Radius': /^d$/i,
   'SIf': /^d$/i,  'SIb': /^d$/i,
   'BCVf': /^d$/i, 'BCVb': /^d$/i,
   'KVf': /^[µuμ]?m$/i, 'KVb': /^[µuμ]?m$/i,

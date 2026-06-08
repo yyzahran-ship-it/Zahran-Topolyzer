@@ -46,6 +46,22 @@ export const normalRanges: Record<string, NormalRange> = {
     borderlineHigh: 47.2,
     displayRange: '43.0 – 45.0 D',
   },
+  'flat radius': {
+    displayName: 'Flat Radius (rf)',
+    unit: 'D',
+    normalMin: 40.0,
+    normalMax: 44.0,
+    borderlineHigh: 46.0,
+    displayRange: '40.0 – 44.0 D',
+  },
+  'steep radius': {
+    displayName: 'Steep Radius (rs)',
+    unit: 'D',
+    normalMin: 41.0,
+    normalMax: 46.0,
+    borderlineHigh: 47.2,
+    displayRange: '41.0 – 46.0 D',
+  },
   mpp: {
     displayName: 'MPP (Mean Pupil Power)',
     unit: 'D',
