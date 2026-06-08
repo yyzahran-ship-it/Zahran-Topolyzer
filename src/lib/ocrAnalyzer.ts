@@ -471,39 +471,47 @@ async function preprocessForOCR(dataUrl: string): Promise<{ url: string; w: numb
         d[i] = d[i + 1] = d[i + 2] = v;
       }
 
-      // Step 3: Local adaptive binary threshold.
-      // Small ~12 px blocks (mirrors cv2.ADAPTIVE_THRESH_GAUSSIAN_C blockSize=11)
-      // so each block binarises against its own local mean minus a small C offset.
-      // Smaller blocks = sharper response to tight character strokes; the previous
-      // ~48 px blocks could merge the local mean of a digit with its white surround,
-      // washing out thin strokes and causing Tesseract to misread e.g. "4" as "3".
-      const blockSize = Math.max(8, Math.round(Math.min(cW, cH) * 0.004));
-      const nbX = Math.ceil(cW / blockSize);
-      const nbY = Math.ceil(cH / blockSize);
-      const means = new Float32Array(nbX * nbY);
-      for (let by = 0; by < nbY; by++) {
-        for (let bx = 0; bx < nbX; bx++) {
-          let sum = 0, cnt = 0;
-          const y1 = Math.min((by + 1) * blockSize, cH);
-          const x1 = Math.min((bx + 1) * blockSize, cW);
-          for (let y = by * blockSize; y < y1; y++)
-            for (let x = bx * blockSize; x < x1; x++) { sum += d[(y * cW + x) * 4]; cnt++; }
-          means[by * nbX + bx] = cnt ? sum / cnt : 128;
+      // Step 3: Per-pixel adaptive threshold via integral image.
+      // Faithful port of cv2.adaptiveThreshold(gray,255,ADAPTIVE_THRESH_GAUSSIAN_C,
+      // THRESH_BINARY,11,2): for each pixel compute the mean of its 11×11 neighbourhood
+      // (halfK=5 → 11×11 window) and binarise with threshold = mean − C (C=2).
+      // Using a summed-area table (integral image) gives O(W×H) total time regardless
+      // of window size, avoiding the block-boundary artifacts of a coarse grid approach.
+      const intStride = cW + 1;
+      const integral = new Float64Array(intStride * (cH + 1));
+      for (let y = 0; y < cH; y++) {
+        for (let x = 0; x < cW; x++) {
+          integral[(y + 1) * intStride + (x + 1)] =
+            d[(y * cW + x) * 4]
+            + integral[y * intStride + (x + 1)]
+            + integral[(y + 1) * intStride + x]
+            - integral[y * intStride + x];
         }
       }
+      const HALF_K = 5;   // → 11×11 window (matches Python blockSize=11)
+      const C_THRESH = 2; // matches Python C=2
+      const bin = new Uint8Array(cW * cH);
       for (let y = 0; y < cH; y++) {
-        const by = Math.min(Math.floor(y / blockSize), nbY - 1);
+        const iy0 = Math.max(0, y - HALF_K);
+        const iy1 = Math.min(cH - 1, y + HALF_K);
         for (let x = 0; x < cW; x++) {
-          const bx = Math.min(Math.floor(x / blockSize), nbX - 1);
-          const idx = (y * cW + x) * 4;
-          d[idx] = d[idx + 1] = d[idx + 2] = d[idx] >= means[by * nbX + bx] - 8 ? 255 : 0;
+          const ix0 = Math.max(0, x - HALF_K);
+          const ix1 = Math.min(cW - 1, x + HALF_K);
+          const count = (iy1 - iy0 + 1) * (ix1 - ix0 + 1);
+          const sum = integral[(iy1 + 1) * intStride + (ix1 + 1)]
+                    - integral[iy0       * intStride + (ix1 + 1)]
+                    - integral[(iy1 + 1) * intStride + ix0]
+                    + integral[iy0       * intStride + ix0];
+          bin[y * cW + x] = d[(y * cW + x) * 4] > (sum / count) - C_THRESH ? 255 : 0;
         }
+      }
+      for (let i = 0; i < cW * cH; i++) {
+        const idx = i * 4;
+        d[idx] = d[idx + 1] = d[idx + 2] = bin[i];
       }
 
       // Step 4: 3×3 median filter — removes salt-and-pepper noise introduced by
-      // binarization (isolated black specks on white background, or white holes in
-      // black strokes). Mirrors cv2.medianBlur(binary, 3) from the Python reference.
-      // This step significantly reduces Tesseract character confusion (e.g. 4→3, 8→6).
+      // binarization. Mirrors cv2.medianBlur(binary, 3) from the Python reference.
       const src = new Uint8ClampedArray(d);
       for (let y = 1; y < cH - 1; y++) {
         for (let x = 1; x < cW - 1; x++) {
@@ -512,9 +520,8 @@ async function preprocessForOCR(dataUrl: string): Promise<{ url: string; w: numb
             for (let dx = -1; dx <= 1; dx++)
               vals.push(src[((y + dy) * cW + (x + dx)) * 4]);
           vals.sort((a, b) => a - b);
-          const med = vals[4]; // median of 9
           const idx = (y * cW + x) * 4;
-          d[idx] = d[idx + 1] = d[idx + 2] = med;
+          d[idx] = d[idx + 1] = d[idx + 2] = vals[4]; // median of 9
         }
       }
 
