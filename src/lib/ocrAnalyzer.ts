@@ -8,8 +8,8 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /\bk\s*f\b|\bk\s*1\b|flat\s*k|\brf\b/i,              name: 'K1',                  unit: 'D'   },
   // Sirius: "K2 = X D" in K readings, "rs = X D" in Shape indices (anterior steep K)
   { regex: /\bk\s*s\b|\bk\s*2\b|steep\s*k|\brs\b/i,             name: 'K2',                  unit: 'D'   },
-  // Removed \bavg\b — too broad, grabs wrong column from posterior K "Avg = -6.xx D"
-  { regex: /\bk\s*m\b|mean\s*k/i,                                 name: 'Km',                  unit: 'D'   },
+  // "Avg" is the Sirius Sim-K label for mean K. Posterior K "Avg" ≈ −6 D → rejected by RANGES [30,65].
+  { regex: /\bk\s*m\b|mean\s*k|\bavg\b/i,                        name: 'Km',                  unit: 'D'   },
   { regex: /sim\.?\s*k\s*1|simk1/i,                               name: 'SimK1',               unit: 'D'   },
   { regex: /sim\.?\s*k\s*2|simk2/i,                               name: 'SimK2',               unit: 'D'   },
   { regex: /\bc\.?\s*c\.?\s*t\b|central\s*corneal\s*thick/i,      name: 'CCT',                 unit: 'µm'  },
@@ -93,7 +93,7 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /\ba\.?\s*c\.?\s*vol(ume)?|ant\w*\s+cham\w+\s+vol|chamber\s+vol(ume)?|\bacv\b|\baq\w*\.?\s+vol/i, name: 'AC Volume', unit: 'mm³' },
   // ── Multi-device: Eccentricity (shape factor) + AC Angle ──────────────────
   { regex: /\beccentricity\b|\be\s*\(\s*\d+(?:\.\d+)?\s*mm\s*\)/i, name: 'Eccentricity',       unit: ''    },
-  { regex: /\ba\.?\s*c\.?\s*angle\b|ant\w*\s+cham\w*\s+angle|mean\s+angle\b|\baqd\b/i, name: 'AC Angle', unit: '°' },
+  { regex: /\ba\.?\s*c\.?\s*angle\b|ant\w*\s+cham\w*\s+angle|mean\s+angle\b|\baqd\b|\btridocorneal(?:\s+angle)?\b/i, name: 'AC Angle', unit: '°' },
   // ── Galilei Box 3E: KC probability indices ─────────────────────────────────
   { regex: /\bkpi\b|k(?:eratoconus)?\s*prob\w*\s*index/i,          name: 'KPI',                 unit: '%'   },
   { regex: /\bppk\b|pellucid.*prob|prob.*pellucid/i,                name: 'PPK',                 unit: '%'   },
@@ -192,9 +192,11 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   // Q value: Pentacam UL Box 2B / Sirius Shape Indices Col B (anterior) / Galilei Box 3A.
   // Sirius xMin=0.40 targets Col B Shape Indices where the asphericity value lives.
   // The "Q = 4.5mm" zone label in Col A Refractive Analysis reads as 4.5 → fails RANGES[-3,3].
-  'Q value':  { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.40, 0.68, 0.00, 0.58], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  // Sirius anterior Q lives in upper Shape Indices (y<0.44); posterior Q in lower half (y>0.45).
+  // Tightened from [0.00,0.58]/[0.30,0.78] to prevent cross-contamination between sections.
+  'Q value':  { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.40, 0.68, 0.00, 0.44], Galilei: [0.38, 1.00, 0.05, 0.45] },
   // Q Post: Pentacam Box 2C / Sirius Shape Indices Col B (posterior section)
-  'Q Post':   { Pentacam: [0.00, 0.58, 0.30, 0.65], Sirius: [0.40, 0.68, 0.30, 0.78] },
+  'Q Post':   { Pentacam: [0.00, 0.58, 0.30, 0.65], Sirius: [0.40, 0.68, 0.45, 0.80] },
   // Eccentricity (shape factor): Pentacam Box 2B/2C, Galilei Box 3A
   'Eccentricity': { Pentacam: [0.00, 0.58, 0.08, 0.65], Galilei: [0.38, 1.00, 0.05, 0.45] },
   // ── Pentacam lower-left / Galilei Box 3C: pachymetry ──────────────────────
