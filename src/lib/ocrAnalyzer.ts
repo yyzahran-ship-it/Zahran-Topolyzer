@@ -43,8 +43,8 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /\bs\.?\s*r\.?\s*a\.?\s*x\b/i,                        name: 'SRAX',                unit: '°'   },
   { regex: /\bs\.?\s*a\.?\s*i\b/i,                                name: 'SAI',                 unit: ''    },
   { regex: /\bs\.?\s*r\.?\s*i\b/i,                                name: 'SRI',                 unit: ''    },
-  // Sirius: HVID = horizontal visible iris diameter (same as WTW)
-  { regex: /\bw\.?\s*t\.?\s*w\b|white.to.white|\bhvid\b/i,       name: 'WTW',                 unit: 'mm'  },
+  // Sirius: HIVD = Horizontal Iris Visible Diameter (same as WTW); label is "HIVD" not "HVID"
+  { regex: /\bw\.?\s*t\.?\s*w\b|white.to.white|\bhvid\b|\bhivd\b/i,       name: 'WTW',                 unit: 'mm'  },
   // ACD: "ACD:" / "AC Depth:" / "AC Depth (Endo):" (Sirius triple-confirmation spec)
   // ACD: "ACD:" / "HACD:" (Sirius label) / "AC Depth:" / "AC Depth (Endo):"
   { regex: /\ba\.?\s*c\.?\s*d\b|\bhacd\b|ac\s+depth(?:\s*\([^)]*\))?/i, name: 'ACD',              unit: 'mm'  },
@@ -102,6 +102,21 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /irreg\w*\s*3\s*mm|3[\s.]?mm\s*irreg/i,                 name: 'Irregularity 3mm',    unit: 'D'   },
   { regex: /irreg\w*\s*5\s*mm|5[\s.]?mm\s*irreg/i,                 name: 'Irregularity 5mm',    unit: 'D'   },
   { regex: /bfs\s*ratio|ant\w*\s*bfs.*\/.*post\w*|post.*bfs.*ratio/i, name: 'BFS Ratio',        unit: ''    },
+  // ── Sirius KC screening panel (Phoenix manual §5.6) ──────────────────────────
+  // Rbf: apical radius of best-fit ellipsoid (KC screening). Label "Rbf" on-screen.
+  { regex: /\brbf\b/i,                                              name: 'Rbf',                 unit: 'mm'  },
+  // BCV: ectasia index from Zernike coma+trefoil (single composite index).
+  // Negative lookahead avoids matching BCVf / BCVb (different older-format labels).
+  { regex: /\bbcv\b(?!\s*[fb])/i,                                   name: 'BCV',                 unit: 'µm'  },
+  // TL: least (minimum) corneal thickness in KC screening panel.
+  { regex: /\btl\b/i,                                               name: 'TL',                  unit: 'µm'  },
+  // C40 / C(4,0): primary spherical aberration coefficient in KC screening.
+  { regex: /\bc\s*4\s*0\b|\bc\s*\(\s*4\s*,\s*0\s*\)\b/i,          name: 'C40',                 unit: 'µm'  },
+  // SD: Irregularity of curvature (standard deviation) in Optical quality indices.
+  { regex: /\bsd\b/i,                                               name: 'SD',                  unit: 'D'   },
+  // PPI: Pellucid Probability Index on Sirius (0–100 %). Negative lookahead excludes
+  // Pentacam's "PPI-Avg" / "PPI-Min" (Pachymetric Progression Index).
+  { regex: /\bppi\b(?!\s*-)/i,                                      name: 'PPI',                 unit: '%'   },
 ];
 
 interface Word {
@@ -245,8 +260,19 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   'Coma':               { Sirius: [0.33, 1.00, 0.68, 1.00] },
   'Trefoil':            { Sirius: [0.33, 1.00, 0.68, 1.00] },
   'Spherical Aberration':{ Sirius: [0.33, 1.00, 0.68, 1.00] },
+  // ── Sirius KC screening panel (Phoenix manual §5.6): Rbf / BCV / C40 / TL ────
+  // Placed in the same middle-column region (x=0.33–0.55) as KVf/BCVf/SIf.
+  // y-range is broad (0.28–0.90) to accommodate all KC panel rows.
+  'Rbf': { Sirius: [0.33, 0.55, 0.28, 0.65] },
+  'BCV': { Sirius: [0.33, 0.55, 0.28, 0.65] },
+  'C40': { Sirius: [0.33, 0.55, 0.28, 0.65] },
+  'TL':  { Sirius: [0.33, 0.55, 0.28, 0.90] },
+  // KC probability indices — bottom of KC screening panel
+  'KPI': { Sirius: [0.33, 0.55, 0.50, 0.95], Galilei: [0.38, 1.00, 0.75, 1.00] },
+  'PPI': { Sirius: [0.33, 0.55, 0.55, 0.95] },
+  // SD: Irregularity of curvature — Optical quality indices, same region as MPP
+  'SD':  { Sirius: [0.52, 0.85, 0.00, 0.40] },
   // ── Galilei Box 3E: KC probability indices ─────────────────────────────────
-  'KPI':    { Galilei: [0.38, 1.00, 0.75, 1.00] },
   'PPK':    { Galilei: [0.38, 1.00, 0.75, 1.00] },
   'CLMIaa': { Galilei: [0.38, 1.00, 0.75, 1.00] },
   'SAI':    { Galilei: [0.38, 1.00, 0.75, 1.00] },
@@ -283,21 +309,26 @@ const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
   // posterior K values (K1=-6.xx D, K2=-7.xx D), and PARAM_SITES further gates them to the
   // Sim-k y-band. SimK1/SimK2 ARE blocked because their regex (/sim\.?k1/) can never match
   // Sirius's "Sim-k + K1-row" two-line layout — blocking avoids spurious hits elsewhere.
+  // Sirius: KPI and PPI DO exist (Phoenix manual §5.6.3); removing them from block.
+  // PPK is Galilei-only. KI/CKI/IHA/IHD/BAD-D/ISV/IVA/Rmin are Pentacam-only.
   'Sirius': new Set(['SimK1', 'SimK2',
                      'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin',
-                     'CLMIaa', 'KPI', 'PPK',
+                     'CLMIaa', 'PPK',
                      'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
-  // Pentacam: no Sirius BCV/KV/SI indices or Surface RMS; no Galilei/Orbscan specifics.
+  // Pentacam: no Sirius BCV/KV/SI/Rbf/TL/C40/SD/PPI; no Galilei/Orbscan specifics.
   'Pentacam': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
+                       'BCV', 'Rbf', 'TL', 'C40', 'SD', 'PPI',
                        'RMS Ant', 'RMS Post', 'Apex Curvature',
                        'CLMIaa', 'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
   // Galilei: no Sirius-specific or Pentacam-specific indices; no Orbscan irregularity.
   'Galilei': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
+                      'BCV', 'Rbf', 'TL', 'C40', 'SD', 'PPI',
                       'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA',
                       'RMS Ant', 'RMS Post', 'Apex Curvature',
                       'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
   // Orbscan: no Sirius/Pentacam/Galilei indices; Irregularity/BFS Ratio are Orbscan-specific.
   'Orbscan': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
+                      'BCV', 'Rbf', 'TL', 'C40', 'SD', 'PPI',
                       'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA',
                       'RMS Ant', 'RMS Post', 'Apex Curvature', 'CLMIaa']),
 };
@@ -321,6 +352,12 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'Astigmatism': [-15, 15], 'Q value': [-3, 3], 'Q Post': [-3, 3],
   'HOA RMS': [0, 10], 'Coma': [0, 5], 'Trefoil': [0, 5], 'Spherical Aberration': [-2, 2],
   'I-S value': [-20, 20], 'LSA': [0, 10], 'MPP': [35, 55],
+  // Sirius KC screening (Phoenix manual §5.6)
+  'Rbf': [6.0, 10.0], 'BCV': [0, 60], 'TL': [200, 850], 'C40': [-2, 2],
+  // Sirius Optical quality indices
+  'SD': [0, 10],
+  // Sirius Pellucid Probability Index
+  'PPI': [0, 100],
   'RMS Ant': [0, 20], 'RMS Post': [0, 20],
   'Flat Radius': [30, 70], 'Steep Radius': [30, 70],
   'Apex Curvature': [30, 70], 'Apex Thickness': [200, 800],
@@ -364,6 +401,10 @@ const PARAM_UNIT_RE: Partial<Record<string, RegExp>> = {
   'Spherical Aberration': /^[µuμ]m|um$/i,
   'RMS Ant': /^[µuμ]m|um$/i,
   'RMS Post':/^[µuμ]m|um$/i,
+  // Sirius KC screening + Optical quality indices
+  'Rbf': /^mm$/i,
+  'BCV': /^[µuμ]?m$/i, 'TL': /^[µuμ]?m$/i, 'C40': /^[µuμ]?m$/i,
+  'SD': /^d$/i,
 };
 
 // Extract numeric value from OCR'd text — tolerates units attached to digits
