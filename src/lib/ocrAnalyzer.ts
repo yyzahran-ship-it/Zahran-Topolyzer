@@ -117,7 +117,7 @@ const DEVICE_PANEL: Partial<Record<string, [number, number]>> = {
 };
 
 // ── Per-parameter bounding box [xMin, xMax, yMin, yMax] per device ───────────
-// Image fractions (0–1). Generous ±12 % margins tolerate crops and firmware variants.
+// Image fractions (0–1). Generous ±10 % margins tolerate crops and firmware variants.
 //
 // Pentacam 4-Map Refractive (Oculus):
 //   Upper-left  (x 0–58%, y 8–62%): K1, K2, Km, Astigmatism, Q value, Eccentricity (Box 2B)
@@ -128,14 +128,31 @@ const DEVICE_PANEL: Partial<Record<string, [number, number]>> = {
 //   Lower-right (x 40–100%, y 8–97%): Kmax, Posterior Elevation (lower-right)
 //   BAD/Topometric (separate screen): BAD-D, ART-Max, ISV, IVA …
 //
-// Sirius KCS — right panel (x > 33%), section stack (top → bottom):
-//   [0.03–0.45] KC indices  : KI, ARIndex
-//   [0.02–0.38] Box 2A      : Apex Curvature, Apex Thickness, Pupil Diameter, AC Volume
-//   [0.32–0.62] Box 2B K    : SimK1, SimK2, Astigmatism, K1, K2
-//   [0.24–0.55] Biometry    : WTW, ACD
-//   [0.38–0.62] Box 2C Shape: Q value, Q Post, RMS Ant, RMS Post
-//   [0.45–0.92] Box 2D KC   : SIf, SIb, KVf, KVb, BCVf, BCVb
-//   [0.68–1.00] Aberrations : HOA RMS, Coma, Trefoil, Spherical Aberration
+// Sirius KCS — full landscape printout; left 33% = colour maps, right 67% = data panels.
+// x/y fractions are relative to the FULL printout width/height.
+//
+//   Col A — KC Screening + Refractive Analysis  (x 0.33–0.52):
+//     [y 0.00–0.30] Refractive Analysis : Astigmatism (Cyl), Q (zone label only)
+//     [y 0.30–0.65] KC front indices    : SIf, KVf, BCVf
+//     [y 0.52–0.90] KC back indices     : SIb, KVb, BCVb
+//     [y 0.74–0.88] KC vertex thickness : Thk (NOT used for Thinnest Point — see Col E)
+//
+//   Col B — Shape Indices  (x 0.42–0.66):
+//     [y 0.00–0.55] Anterior shape      : Q value (asphericity), RMS Ant
+//     [y 0.33–0.75] Posterior shape     : Q Post, RMS Post
+//
+//   Col C — K Readings  (x 0.48–0.75):
+//     Multiple Ø zones: K1, K2, Avg, Cyl  (K1/K2 blocked for Sirius via DEVICE_BLOCK)
+//
+//   Col D — Sim-K + additional K  (x 0.60–0.85):
+//     [y 0.00–0.30] Sim-K              : SimK1, SimK2, Astigmatism
+//
+//   Col E — Summary Indices  (x 0.68–1.00):
+//     [y 0.40–0.58] HVID               : WTW
+//     [y 0.46–0.72] Pupil (Topographic): Pupil Diameter
+//     [y 0.56–0.84] Thinnest location  : Thinnest Point ("Thk = µm"), Pachymetry Min
+//     [y 0.68–0.92] Apex               : Apex Curvature ("Curv = D")
+//     [y 0.76–1.00] Anterior chamber   : ACD (from "CCT+AD"), AC Volume, AC Angle, CCT
 //
 // Galilei Refractive Report — right panel (x > 38%), section stack (top → bottom):
 //   [0.05–0.45] Box 3A SimK : SimK1, SimK2, Astigmatism, Q value, Eccentricity
@@ -151,54 +168,61 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   'Km':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
   'Flat K':  { Pentacam: [0.00, 0.58, 0.08, 0.62] },
   'Steep K': { Pentacam: [0.00, 0.58, 0.08, 0.62] },
-  'Astigmatism': { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.33, 1.00, 0.32, 0.62], Galilei: [0.38, 1.00, 0.05, 0.65] },
+  // Sirius Astigmatism: from Cyl in K readings (Col C/D) or Refractive Analysis (Col A top).
+  'Astigmatism': { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.33, 0.85, 0.00, 0.65], Galilei: [0.38, 1.00, 0.05, 0.65] },
   // ── Pentacam upper-right: anterior elevation + Q ───────────────────────────
   'Anterior Elevation': { Pentacam: [0.40, 1.00, 0.08, 0.62] },
-  // Q value: Pentacam UL (Box 2B front) / Sirius right panel bottom of SimK block / Galilei Box 3A
-  // Sirius xMin=0.45 (not 0.33) — left-panel "Shape Indices" Q is at x<0.33; midpoint of label+value
-  // can drift to 0.33–0.40 range and produce an elongated cross-panel box. 0.45 keeps only genuinely
-  // right-panel reads where the Q label itself is well inside the right data column.
-  'Q value':  { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.45, 1.00, 0.38, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45] },
-  // Q Post: Pentacam Box 2C (back cornea, left column) / Sirius Box 2C
-  'Q Post':   { Pentacam: [0.00, 0.58, 0.30, 0.65], Sirius: [0.33, 1.00, 0.38, 0.62] },
+  // Q value: Pentacam UL Box 2B / Sirius Shape Indices Col B (anterior) / Galilei Box 3A.
+  // Sirius xMin=0.40 targets Col B Shape Indices where the asphericity value lives.
+  // The "Q = 4.5mm" zone label in Col A Refractive Analysis reads as 4.5 → fails RANGES[-3,1].
+  'Q value':  { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.40, 0.68, 0.00, 0.58], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  // Q Post: Pentacam Box 2C / Sirius Shape Indices Col B (posterior section)
+  'Q Post':   { Pentacam: [0.00, 0.58, 0.30, 0.65], Sirius: [0.40, 0.68, 0.30, 0.78] },
   // Eccentricity (shape factor): Pentacam Box 2B/2C, Galilei Box 3A
   'Eccentricity': { Pentacam: [0.00, 0.58, 0.08, 0.65], Galilei: [0.38, 1.00, 0.05, 0.45] },
   // ── Pentacam lower-left / Galilei Box 3C: pachymetry ──────────────────────
-  'CCT':           { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76], Galilei: [0.38, 1.00, 0.45, 0.75] },
-  'Thinnest Point':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76], Galilei: [0.38, 1.00, 0.45, 0.75] },
-  'Pachymetry Min':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76] },
-  'Apex Thickness':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.05, 0.45] },
-  'Corneal Volume':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.44, 0.76], Galilei: [0.38, 1.00, 0.45, 0.75] },
+  // Sirius: "Thk" appears in BOTH Col A (KC vertex thickness, x≈0.33-0.52) AND
+  // Col E Summary Indices (true thinnest-point measurement, x≈0.68-1.00).
+  // xMin=0.68 ensures only the Summary Indices "Thk = µm" is used, not the KC vertex Thk.
+  'CCT':           { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.55, 0.85], Galilei: [0.38, 1.00, 0.45, 0.75] },
+  'Thinnest Point':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.55, 0.85], Galilei: [0.38, 1.00, 0.45, 0.75] },
+  'Pachymetry Min':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.55, 0.85] },
+  'Apex Thickness':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.55, 0.85] },
+  'Corneal Volume':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.75, 1.00], Galilei: [0.38, 1.00, 0.45, 0.75] },
   // ── Biometry: ACD, WTW, AC Volume, AC Angle, Pupil Diameter ───────────────
-  'ACD':          { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.22, 0.55], Galilei: [0.38, 1.00, 0.60, 0.88] },
-  'WTW':          { Sirius: [0.33, 1.00, 0.20, 0.55], Galilei: [0.38, 1.00, 0.60, 0.88] },
-  'AC Volume':    { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.05, 0.45], Galilei: [0.38, 1.00, 0.60, 0.88] },
-  'AC Angle':     { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.05, 0.45], Galilei: [0.38, 1.00, 0.60, 0.88] },
-  'Pupil Diameter':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.33, 1.00, 0.02, 0.38], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  // Sirius: all in Summary Indices Col E (x=0.68-1.00), stacked top-to-bottom.
+  'ACD':          { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.74, 1.00], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  'WTW':          { Sirius: [0.68, 1.00, 0.38, 0.60], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  'AC Volume':    { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.77, 1.00], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  'AC Angle':     { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.77, 1.00], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  'Pupil Diameter':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.44, 0.72], Galilei: [0.38, 1.00, 0.60, 0.88] },
   // ── Pentacam lower-right: Kmax + posterior elevation ───────────────────────
   'Kmax':               { Pentacam: [0.40, 1.00, 0.08, 0.97] },
   'Posterior Elevation':{ Pentacam: [0.40, 1.00, 0.52, 0.97] },
-  // ── Sirius SimK (Box 2B) ────────────────────────────────────────────────────
-  'SimK1': { Sirius: [0.33, 1.00, 0.32, 0.62] },
-  'SimK2': { Sirius: [0.33, 1.00, 0.32, 0.62] },
-  // ── Sirius KC indices top (KI, ARIndex) ─────────────────────────────────────
-  // x starts at 0.55 to avoid the K-readings formula zone where "1.3375" constants appear.
-  'KI':      { Sirius: [0.55, 1.00, 0.03, 0.45] },
-  'ARIndex': { Sirius: [0.55, 1.00, 0.03, 0.45] },
-  // ── Sirius Box 2A: summary/biometry (top of right panel) ───────────────────
-  'Apex Curvature': { Sirius: [0.33, 1.00, 0.05, 0.45] },
-  // ── Sirius Box 2C: Shape Indices (Q, RMS, below K readings) ────────────────
-  'RMS Ant':  { Sirius: [0.33, 1.00, 0.38, 0.65] },
-  'RMS Post': { Sirius: [0.33, 1.00, 0.38, 0.65] },
-  // ── Sirius Box 2D: KC screening indices (below KC Screening header at y≈0.53-0.55)
-  // yMin 0.56 ensures the label matches data rows, not the section header text above.
-  'SIf':  { Sirius: [0.33, 1.00, 0.56, 0.92] },
-  'SIb':  { Sirius: [0.33, 1.00, 0.56, 0.92] },
-  'KVf':  { Sirius: [0.33, 1.00, 0.56, 0.92] },
-  'KVb':  { Sirius: [0.33, 1.00, 0.56, 0.92] },
-  'BCVf': { Sirius: [0.33, 1.00, 0.56, 0.92] },
-  'BCVb': { Sirius: [0.33, 1.00, 0.56, 0.92] },
-  // ── Sirius aberrations section ──────────────────────────────────────────────
+  // ── Sirius Sim-K (Col D top, x=0.60-1.00, y=0.00-0.30) ─────────────────────
+  // Restrict to top-right section; prevents confusion with centre K-readings columns.
+  'SimK1': { Sirius: [0.60, 1.00, 0.00, 0.30] },
+  'SimK2': { Sirius: [0.60, 1.00, 0.00, 0.30] },
+  // ── Sirius KC Screening Col A: KI / ARIndex ──────────────────────────────────
+  // KI is DEVICE_BLOCK'd for Sirius; ARIndex kept for completeness.
+  'KI':      { Sirius: [0.33, 0.55, 0.00, 0.45] },
+  'ARIndex': { Sirius: [0.33, 0.55, 0.00, 0.45] },
+  // ── Sirius Summary Indices Col E: Apex Curvature (under "✗ Apex" header) ───
+  'Apex Curvature': { Sirius: [0.68, 1.00, 0.66, 0.94] },
+  // ── Sirius Shape Indices Col B: surface RMS/A ────────────────────────────────
+  'RMS Ant':  { Sirius: [0.40, 0.68, 0.00, 0.52] },
+  'RMS Post': { Sirius: [0.40, 0.68, 0.30, 0.78] },
+  // ── Sirius KC Screening Col A: KC indices (SIf/SIb/KVf/KVb/BCVf/BCVb) ──────
+  // xMax=0.55 keeps extraction within Col A and prevents confusion with right-panel values.
+  // Front (SIf/KVf/BCVf) appear in upper half of KC Screening, back in lower half.
+  // The KC vertex "Thk" (y≈0.74-0.88) is NOT captured here — Thinnest Point targets Col E.
+  'SIf':  { Sirius: [0.33, 0.55, 0.28, 0.65] },
+  'KVf':  { Sirius: [0.33, 0.55, 0.28, 0.65] },
+  'BCVf': { Sirius: [0.33, 0.55, 0.28, 0.65] },
+  'SIb':  { Sirius: [0.33, 0.55, 0.50, 0.90] },
+  'KVb':  { Sirius: [0.33, 0.55, 0.50, 0.90] },
+  'BCVb': { Sirius: [0.33, 0.55, 0.50, 0.90] },
+  // ── Sirius aberrations (Col A bottom or separate section) ───────────────────
   'HOA RMS':            { Sirius: [0.33, 1.00, 0.68, 1.00] },
   'Coma':               { Sirius: [0.33, 1.00, 0.68, 1.00] },
   'Trefoil':            { Sirius: [0.33, 1.00, 0.68, 1.00] },
