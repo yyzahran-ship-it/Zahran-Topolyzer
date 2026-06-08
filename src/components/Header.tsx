@@ -14,7 +14,7 @@ export function Header() {
             Corneal Topography Analyzer — Pentacam · Sirius · Galilei · Orbscan
           </p>
         </div>
-        <span className="text-white text-xs font-mono bg-white/20 px-2 py-0.5 rounded-full">v2.51</span>
+        <span className="text-white text-xs font-mono bg-white/20 px-2 py-0.5 rounded-full">v2.52</span>
       </div>
     </header>
   );

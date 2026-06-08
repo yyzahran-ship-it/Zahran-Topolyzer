@@ -485,7 +485,11 @@ async function preprocessForOCR(dataUrl: string): Promise<{ url: string; w: numb
       //   For each row y we slide the window down (add new bottom row, remove old
       //   top row). Within each row we slide a running horizontal sum across colSum.
       const HALF_K = 5;   // → 11×11 window (matches Python blockSize=11)
-      const C_THRESH = 2; // matches Python C=2
+      const C_THRESH = 10; // C=2 (Python's value) is too aggressive for phone photos:
+                            // background pixels 10 units below local mean become black,
+                            // creating salt-and-pepper noise Tesseract can't parse.
+                            // C=10 matches the effective offset from v2.48 but now applied
+                            // per-pixel (no block boundaries) for cleaner character strokes.
       const colSum = new Float32Array(cW);
       const bin = new Uint8Array(cW * cH);
 
