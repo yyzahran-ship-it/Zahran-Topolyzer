@@ -46,7 +46,8 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   // Sirius: HVID = horizontal visible iris diameter (same as WTW)
   { regex: /\bw\.?\s*t\.?\s*w\b|white.to.white|\bhvid\b/i,       name: 'WTW',                 unit: 'mm'  },
   // ACD: "ACD:" / "AC Depth:" / "AC Depth (Endo):" (Sirius triple-confirmation spec)
-  { regex: /\ba\.?\s*c\.?\s*d\b|ac\s+depth(?:\s*\([^)]*\))?/i,   name: 'ACD',                 unit: 'mm'  },
+  // ACD: "ACD:" / "HACD:" (Sirius label) / "AC Depth:" / "AC Depth (Endo):"
+  { regex: /\ba\.?\s*c\.?\s*d\b|\bhacd\b|ac\s+depth(?:\s*\([^)]*\))?/i, name: 'ACD',              unit: 'mm'  },
   { regex: /corneal\s*vol/i,                                       name: 'Corneal Volume',      unit: 'mm³' },
   // Q value anchors: "Q val", "Asphericity", "Q =", "Q:" (Sirius), "Q (8mm):" (Sirius)
   { regex: /q[.\s]?val|aspherici?ty|\bq\s*=|\bq\s*\(\s*8\s*mm\s*\)\s*:|\bq\s*:/i, name: 'Q value', unit: '' },
@@ -69,6 +70,8 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /\bflat\b(?!\s*k)/i,                                   name: 'Flat K',              unit: 'D'   },
   { regex: /\bsteep\b(?!\s*k)/i,                                  name: 'Steep K',             unit: 'D'   },
   { regex: /\blsa\b/i,                                            name: 'LSA',                 unit: 'D'   },
+  // MPP: Mean Pupil Power — Sirius Refractive Analysis section
+  { regex: /\bmpp\b|mean\s+pupil\s+pow/i,                        name: 'MPP',                 unit: 'D'   },
   // ── New Sirius Box 2C / 2E parameters ──────────────────────────────────────
   // Q Post: posterior asphericity, distinct label from anterior Q
   { regex: /\bq[\s.]*(post|back|posterior)\b/i,                  name: 'Q Post',              unit: ''    },
@@ -174,6 +177,8 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   'Steep K': { Pentacam: [0.00, 0.58, 0.08, 0.62] },
   // Sirius Astigmatism: from Cyl in K readings (Col C/D) or Refractive Analysis (Col A top).
   'Astigmatism': { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.33, 0.85, 0.00, 0.65], Galilei: [0.38, 1.00, 0.05, 0.65] },
+  // MPP: Sirius Refractive Analysis section (Col D, x=0.52-0.85, upper rows y=0.00-0.30)
+  'MPP': { Sirius: [0.52, 0.85, 0.00, 0.30] },
   // ── Pentacam upper-right: anterior elevation + Q ───────────────────────────
   'Anterior Elevation': { Pentacam: [0.40, 1.00, 0.08, 0.62] },
   // Q value: Pentacam UL Box 2B / Sirius Shape Indices Col B (anterior) / Galilei Box 3A.
@@ -305,7 +310,7 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'WTW': [8, 16], 'ACD': [1, 6], 'Corneal Volume': [20, 130],
   'Astigmatism': [-15, 15], 'Q value': [-3, 3], 'Q Post': [-3, 3],
   'HOA RMS': [0, 10], 'Coma': [0, 5], 'Trefoil': [0, 5], 'Spherical Aberration': [-2, 2],
-  'I-S value': [-20, 20], 'LSA': [0, 10],
+  'I-S value': [-20, 20], 'LSA': [0, 10], 'MPP': [35, 55],
   'RMS Ant': [0, 20], 'RMS Post': [0, 20],
   'Apex Curvature': [30, 70], 'Apex Thickness': [200, 800],
   'Pupil Diameter': [1, 10], 'AC Volume': [50, 400],
@@ -328,6 +333,7 @@ const PARAM_UNIT_RE: Partial<Record<string, RegExp>> = {
   // Q value / Q Post are dimensionless — no unit requirement. Omitting these entries
   // allows Pass 0 to find "Q = 1.21" directly; otherwise the /^d$/i check blocks Pass 0
   // and forces Pass 1/2 where "Q" may land on a merged OCR line (wrong box position).
+  'MPP': /^d$/i,
   'SIf': /^d$/i,  'SIb': /^d$/i,
   'BCVf': /^d$/i, 'BCVb': /^d$/i,
   'KVf': /^[µuμ]?m$/i, 'KVb': /^[µuμ]?m$/i,

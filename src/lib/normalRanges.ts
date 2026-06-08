@@ -46,6 +46,14 @@ export const normalRanges: Record<string, NormalRange> = {
     borderlineHigh: 47.2,
     displayRange: '43.0 – 45.0 D',
   },
+  mpp: {
+    displayName: 'MPP (Mean Pupil Power)',
+    unit: 'D',
+    normalMin: 40.0,
+    normalMax: 46.0,
+    borderlineHigh: 48.0,
+    displayRange: '40.0 – 46.0 D',
+  },
   kmax: {
     displayName: 'Kmax',
     unit: 'D',
