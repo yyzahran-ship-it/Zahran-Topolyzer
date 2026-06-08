@@ -768,6 +768,42 @@ export async function analyzeWithOCR(
   return matchParameters(words, imgWidth, imgHeight, onProgress);
 }
 
+// Tesseract sometimes tokenises "42.36" as two words: "42" and ".36".
+// This merges adjacent tokens that form a single decimal number or negative sign,
+// so Pass 0 ("LABEL = VALUE UNIT") can match the complete value before the unit.
+function joinSplitDecimals(words: Word[]): Word[] {
+  if (words.length < 2) return words;
+  const out: Word[] = [];
+  let i = 0;
+  while (i < words.length) {
+    const w = words[i];
+    const nxt = i + 1 < words.length ? words[i + 1] : null;
+    if (nxt) {
+      const sameY = Math.abs((w.bbox.y0 + w.bbox.y1) / 2 - (nxt.bbox.y0 + nxt.bbox.y1) / 2)
+                    < (w.bbox.y1 - w.bbox.y0) * 1.5;
+      if (sameY && (
+        (/\d$/.test(w.text)   && /^\.\d/.test(nxt.text)) ||   // "42" + ".36"
+        (/\d\.$/.test(w.text) && /^\d/.test(nxt.text))   ||   // "42." + "36"
+        (w.text === '-'        && /^\d/.test(nxt.text))        // "-" + "0.12"
+      )) {
+        out.push({
+          text: w.text + nxt.text,
+          confidence: Math.min(w.confidence, nxt.confidence),
+          bbox: {
+            x0: w.bbox.x0, y0: Math.min(w.bbox.y0, nxt.bbox.y0),
+            x1: nxt.bbox.x1, y1: Math.max(w.bbox.y1, nxt.bbox.y1),
+          },
+        });
+        i += 2;
+        continue;
+      }
+    }
+    out.push(w);
+    i++;
+  }
+  return out;
+}
+
 // ── Shared parameter-matching logic ───────────────────────────────────────────
 // Called by both analyzeWithOCR (Tesseract path) and analyzeWithMLKitBridge.
 function matchParameters(
@@ -776,7 +812,8 @@ function matchParameters(
   imgHeight: number,
   onProgress: (msg: string) => void,
 ): AnalysisResult {
-  let words = wordsIn;
+  // Merge split decimal tokens before any passes so "42" ".36" "D" becomes "42.36" "D".
+  let words = joinSplitDecimals(wordsIn);
 
   onProgress('Parsing parameters…');
 
@@ -903,8 +940,9 @@ function matchParameters(
         const unitRe = PARAM_UNIT_RE[pat.name];
         if (unitRe) {
           const embeddedUnit = w.text.replace(/[\d\.\-,\s]/g, '').trim();
-          const nextWord = idx + 1 < candidates.length ? candidates[idx + 1].text.trim() : '';
-          if (!unitRe.test(embeddedUnit) && !unitRe.test(nextWord)) return false;
+          const w1 = idx + 1 < candidates.length ? candidates[idx + 1].text.trim() : '';
+          const w2 = idx + 2 < candidates.length ? candidates[idx + 2].text.trim() : '';
+          if (!unitRe.test(embeddedUnit) && !unitRe.test(w1) && !unitRe.test(w2)) return false;
         }
         return true;
       });
