@@ -418,46 +418,76 @@ function nearbyNum(
   return tier2.sort((a, b) => (a.bbox.y0 - b.bbox.y0) || (a.bbox.x0 - b.bbox.x0))[0];
 }
 
-// Upscale to ~2000px and convert to grayscale.
-// Returns both the processed dataUrl AND the exact canvas pixel dimensions.
-// The canvas dimensions are the ground-truth for OCR bbox fractions — do NOT
-// use max(word.bbox.x1/y1) as a proxy, because camera photos of printouts often
-// have empty desk background below/beside the paper. No words appear there, so
-// max(y1) ≈ bottom-of-printout rather than bottom-of-image, inflating all
-// y-fractions and pushing every overlay box downward by up to 2×.
+// Preprocess image for OCR: normalise scale, stretch contrast, local adaptive threshold.
+// Returns the processed dataUrl AND exact canvas pixel dimensions (used as bbox coordinate space).
+// Do NOT use max(word.bbox.x1/y1) as image size — camera photos have empty desk background,
+// so max-word coords underestimate height and push every overlay box downward.
 async function preprocessForOCR(dataUrl: string): Promise<{ url: string; w: number; h: number }> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
       const W = img.naturalWidth  || img.width  || 1;
       const H = img.naturalHeight || img.height || 1;
-      const scale = Math.min(3, Math.max(1, 2000 / Math.max(W, H)));
+      // Normalise longest edge to ~3000 px.
+      // Upscaling small screenshots gives more pixels per character;
+      // downscaling a 4000 px phone photo reduces per-pixel sensor noise.
+      const scale = Math.min(3, 3000 / Math.max(W, H));
       const canvas = document.createElement('canvas');
-      canvas.width  = Math.round(W * scale);
-      canvas.height = Math.round(H * scale);
+      const cW = canvas.width  = Math.round(W * scale);
+      const cH = canvas.height = Math.round(H * scale);
       const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      // Grayscale + adaptive binary threshold (mirrors OpenCV reference pipeline).
-      // Step 1: luminance-weighted grayscale (handles colored Sirius K-value text).
-      // Step 2: compute mean brightness, then binarise at mean+offset. Using mean
-      // rather than a fixed threshold (like cv2.threshold(img,150,...)) handles
-      // variable lighting in phone photos of printouts.
-      const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, cW, cH);
+      const id = ctx.getImageData(0, 0, cW, cH);
       const d = id.data;
-      let sum = 0;
+
+      // Step 1: Luminance-weighted grayscale (handles coloured Sirius K-value text).
       for (let i = 0; i < d.length; i += 4) {
         const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
         d[i] = d[i + 1] = d[i + 2] = g;
-        sum += g;
       }
-      const mean = sum / (d.length / 4);
-      const thresh = Math.min(220, Math.max(100, mean + 20));
+
+      // Step 2: Contrast normalisation — stretch [min, max] → [0, 255].
+      // Rescues washed-out or under-exposed phone photos without any tuning.
+      let minG = 255, maxG = 0;
       for (let i = 0; i < d.length; i += 4) {
-        const bin = d[i] >= thresh ? 255 : 0;
-        d[i] = d[i + 1] = d[i + 2] = bin;
+        if (d[i] < minG) minG = d[i];
+        if (d[i] > maxG) maxG = d[i];
       }
+      const gRange = maxG - minG || 1;
+      for (let i = 0; i < d.length; i += 4) {
+        const v = Math.round((d[i] - minG) * 255 / gRange);
+        d[i] = d[i + 1] = d[i + 2] = v;
+      }
+
+      // Step 3: Local adaptive binary threshold.
+      // Divides the image into ~48 px blocks; each block binarises against its own
+      // local mean. Shadows, hot-spots, and angle-lighting across the page no longer
+      // shift the global threshold and crush thin characters in dark zones.
+      const blockSize = Math.max(32, Math.round(Math.min(cW, cH) * 0.016));
+      const nbX = Math.ceil(cW / blockSize);
+      const nbY = Math.ceil(cH / blockSize);
+      const means = new Float32Array(nbX * nbY);
+      for (let by = 0; by < nbY; by++) {
+        for (let bx = 0; bx < nbX; bx++) {
+          let sum = 0, cnt = 0;
+          const y1 = Math.min((by + 1) * blockSize, cH);
+          const x1 = Math.min((bx + 1) * blockSize, cW);
+          for (let y = by * blockSize; y < y1; y++)
+            for (let x = bx * blockSize; x < x1; x++) { sum += d[(y * cW + x) * 4]; cnt++; }
+          means[by * nbX + bx] = cnt ? sum / cnt : 128;
+        }
+      }
+      for (let y = 0; y < cH; y++) {
+        const by = Math.min(Math.floor(y / blockSize), nbY - 1);
+        for (let x = 0; x < cW; x++) {
+          const bx = Math.min(Math.floor(x / blockSize), nbX - 1);
+          const idx = (y * cW + x) * 4;
+          d[idx] = d[idx + 1] = d[idx + 2] = d[idx] >= means[by * nbX + bx] - 10 ? 255 : 0;
+        }
+      }
+
       ctx.putImageData(id, 0, 0);
-      resolve({ url: canvas.toDataURL('image/jpeg', 0.92), w: canvas.width, h: canvas.height });
+      resolve({ url: canvas.toDataURL('image/jpeg', 0.92), w: cW, h: cH });
     };
     img.onerror = () => {
       const fallback = document.createElement('canvas');
