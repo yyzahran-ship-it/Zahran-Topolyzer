@@ -472,10 +472,12 @@ async function preprocessForOCR(dataUrl: string): Promise<{ url: string; w: numb
       }
 
       // Step 3: Local adaptive binary threshold.
-      // Divides the image into ~48 px blocks; each block binarises against its own
-      // local mean. Shadows, hot-spots, and angle-lighting across the page no longer
-      // shift the global threshold and crush thin characters in dark zones.
-      const blockSize = Math.max(32, Math.round(Math.min(cW, cH) * 0.016));
+      // Small ~12 px blocks (mirrors cv2.ADAPTIVE_THRESH_GAUSSIAN_C blockSize=11)
+      // so each block binarises against its own local mean minus a small C offset.
+      // Smaller blocks = sharper response to tight character strokes; the previous
+      // ~48 px blocks could merge the local mean of a digit with its white surround,
+      // washing out thin strokes and causing Tesseract to misread e.g. "4" as "3".
+      const blockSize = Math.max(8, Math.round(Math.min(cW, cH) * 0.004));
       const nbX = Math.ceil(cW / blockSize);
       const nbY = Math.ceil(cH / blockSize);
       const means = new Float32Array(nbX * nbY);
@@ -494,7 +496,25 @@ async function preprocessForOCR(dataUrl: string): Promise<{ url: string; w: numb
         for (let x = 0; x < cW; x++) {
           const bx = Math.min(Math.floor(x / blockSize), nbX - 1);
           const idx = (y * cW + x) * 4;
-          d[idx] = d[idx + 1] = d[idx + 2] = d[idx] >= means[by * nbX + bx] - 10 ? 255 : 0;
+          d[idx] = d[idx + 1] = d[idx + 2] = d[idx] >= means[by * nbX + bx] - 8 ? 255 : 0;
+        }
+      }
+
+      // Step 4: 3×3 median filter — removes salt-and-pepper noise introduced by
+      // binarization (isolated black specks on white background, or white holes in
+      // black strokes). Mirrors cv2.medianBlur(binary, 3) from the Python reference.
+      // This step significantly reduces Tesseract character confusion (e.g. 4→3, 8→6).
+      const src = new Uint8ClampedArray(d);
+      for (let y = 1; y < cH - 1; y++) {
+        for (let x = 1; x < cW - 1; x++) {
+          const vals: number[] = [];
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dx = -1; dx <= 1; dx++)
+              vals.push(src[((y + dy) * cW + (x + dx)) * 4]);
+          vals.sort((a, b) => a - b);
+          const med = vals[4]; // median of 9
+          const idx = (y * cW + x) * 4;
+          d[idx] = d[idx + 1] = d[idx + 2] = med;
         }
       }
 
