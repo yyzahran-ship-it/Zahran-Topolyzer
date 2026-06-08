@@ -1,0 +1,48 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.zahrantopolyzer'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.zahrantopolyzer"
+        minSdk 24
+        targetSdk 34
+        versionCode 63
+        versionName "3.0"
+    }
+
+    signingConfigs {
+        debug {
+            // Reuse the existing debug keystore — copy it next to this file first:
+            //   cp ../android-build/debug.keystore ./app/debug.keystore
+            storeFile     file('debug.keystore')
+            storePassword 'android'
+            keyAlias      'androiddebugkey'
+            keyPassword   'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}
+
+dependencies {
+    // ML Kit Text Recognition v2 — on-device, Latin script, no network needed at runtime
+    implementation 'com.google.mlkit:text-recognition:16.0.0'
+}

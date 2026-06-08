@@ -557,10 +557,104 @@ async function preprocessForOCR(dataUrl: string): Promise<{ url: string; w: numb
   });
 }
 
+// Scale image to ~3000px longest edge without binarization.
+// ML Kit performs its own internal preprocessing — passing a colour image
+// gives it the best chance to read coloured K-value text on Sirius prints.
+async function scaleForBridge(dataUrl: string): Promise<{ url: string; w: number; h: number }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const W = img.naturalWidth || img.width || 1;
+      const H = img.naturalHeight || img.height || 1;
+      const scale = Math.min(3, 3000 / Math.max(W, H));
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.round(W * scale);
+      canvas.height = Math.round(H * scale);
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve({ url: canvas.toDataURL('image/jpeg', 0.92), w: canvas.width, h: canvas.height });
+    };
+    img.onerror = () => resolve({ url: dataUrl, w: 1, h: 1 });
+    img.src = dataUrl;
+  });
+}
+
+// Call OcrBridge.recognizeImage and wait for the async JS callback.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function callBridge(bridge: any, base64: string, onProgress: (m: string) => void): Promise<{
+  words: Word[]; imgW: number; imgH: number;
+}> {
+  return new Promise((resolve, reject) => {
+    const cbName = `_mlkitCb_${Date.now()}_${Math.floor(Math.random() * 1e9)}`;
+    const timer = setTimeout(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (window as any)[cbName];
+      reject(new Error('ML Kit OCR timed out'));
+    }, 45_000);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any)[cbName] = (result: any) => {
+      clearTimeout(timer);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (window as any)[cbName];
+      if (!result) { reject(new Error('ML Kit returned null')); return; }
+      const words: Word[] = (result.words ?? []).map((w: any) => ({
+        text: String(w.text),
+        confidence: Number(w.confidence ?? 90),
+        bbox: { x0: Number(w.x0), y0: Number(w.y0), x1: Number(w.x1), y1: Number(w.y1) },
+      }));
+      resolve({ words, imgW: Number(result.imgW), imgH: Number(result.imgH) });
+    };
+
+    onProgress('Running ML Kit OCR…');
+    bridge.recognizeImage(base64, cbName);
+  });
+}
+
+// Full analysis using the Android ML Kit bridge instead of Tesseract.
+// All parameter matching/classification code is shared — only the word
+// acquisition step is different.
+async function analyzeWithMLKitBridge(
+  imageDataUrl: string,
+  onProgress: (msg: string) => void,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  bridge: any,
+): Promise<AnalysisResult> {
+  onProgress('Preparing image…');
+  const { url: scaledUrl } = await scaleForBridge(imageDataUrl);
+
+  let words: Word[];
+  let imgWidth: number;
+  let imgHeight: number;
+
+  try {
+    const r = await callBridge(bridge, scaledUrl, onProgress);
+    words    = r.words;
+    imgWidth = r.imgW;
+    imgHeight= r.imgH;
+  } catch (err) {
+    throw new Error(`ML Kit failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // ── Shared parameter-matching logic (identical to Tesseract path) ───────────
+  return matchParameters(words, imgWidth, imgHeight, onProgress);
+}
+
 export async function analyzeWithOCR(
   imageDataUrl: string,
   onProgress: (msg: string) => void
 ): Promise<AnalysisResult> {
+
+  // ── ML Kit native bridge (Android v3.x) ────────────────────────────────────
+  // When running inside the android-mlkit APK, window.Android.recognizeImage
+  // is injected by OcrBridge.java. Use it instead of Tesseract so we get
+  // Google ML Kit's neural-network text recognition instead of WASM Tesseract.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bridge = (window as any).Android;
+  if (typeof bridge?.recognizeImage === 'function') {
+    return analyzeWithMLKitBridge(imageDataUrl, onProgress, bridge);
+  }
+
+  // ── Tesseract.js fallback (web / older APK) ─────────────────────────────────
   const tesseractBase = 'http://localhost/tesseract/';
 
   onProgress('Downloading language model…');
@@ -670,6 +764,19 @@ export async function analyzeWithOCR(
     URL.revokeObjectURL(workerBlobUrl);
     URL.revokeObjectURL(langBlobUrl);
   }
+
+  return matchParameters(words, imgWidth, imgHeight, onProgress);
+}
+
+// ── Shared parameter-matching logic ───────────────────────────────────────────
+// Called by both analyzeWithOCR (Tesseract path) and analyzeWithMLKitBridge.
+function matchParameters(
+  wordsIn: Word[],
+  imgWidth: number,
+  imgHeight: number,
+  onProgress: (msg: string) => void,
+): AnalysisResult {
+  let words = wordsIn;
 
   onProgress('Parsing parameters…');
 
