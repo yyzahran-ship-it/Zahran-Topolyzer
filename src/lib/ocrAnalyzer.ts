@@ -659,7 +659,7 @@ export async function analyzeWithOCR(
   }
   for (const line of lines) line.sort((a, b) => a.bbox.x0 - b.bbox.x0);
 
-  const found = new Map<string, { value: number; unit: string; x: number; y: number; w: number; h: number }>();
+  const found = new Map<string, { value: number; unit: string; x: number; y: number; w: number; h: number; pass: number }>();
 
   // Record a found parameter.
   // x always anchors at the label's left edge.
@@ -667,7 +667,7 @@ export async function analyzeWithOCR(
   //    y-coordinates (sameRow=true). When spatial search finds a value on a different row
   //    (sameRow=false — e.g. "Thinnest location" header → "481" below), the value word
   //    IS on the correct data row so we use its y.
-  function recordHit(pat: { name: string; unit: string }, labelWord: Word, numWord: Word) {
+  function recordHit(pat: { name: string; unit: string }, labelWord: Word, numWord: Word, pass: number) {
     if (found.has(pat.name)) return;
     const value = parseNum(numWord.text);
     if (value === null) return;
@@ -695,6 +695,7 @@ export async function analyzeWithOCR(
       y: (y0 + y1) / 2 / imgHeight,
       w: (x1 - x0) / imgWidth,
       h: (y1 - y0) / imgHeight,
+      pass,
     });
   }
 
@@ -753,7 +754,7 @@ export async function analyzeWithOCR(
         }
         return true;
       });
-      if (numWord) recordHit(pat, labelWord, numWord);
+      if (numWord) recordHit(pat, labelWord, numWord, 0);
     }
   }
 
@@ -776,7 +777,7 @@ export async function analyzeWithOCR(
       }
       if (!labelWord) continue;
       const numWord = nearbyNum(labelWord, line, imgWidth, imgHeight, pat.name);
-      if (numWord) recordHit(pat, labelWord, numWord);
+      if (numWord) recordHit(pat, labelWord, numWord, 1);
     }
   }
 
@@ -793,7 +794,7 @@ export async function analyzeWithOCR(
         if (!pat.regex.test(line[wi].text) && !pat.regex.test(joined)) continue;
         const labelWord = line[wi];
         const numWord = nearbyNum(labelWord, words, imgWidth, imgHeight, pat.name);
-        if (numWord) { recordHit(pat, labelWord, numWord); break outer; }
+        if (numWord) { recordHit(pat, labelWord, numWord, 2); break outer; }
       }
     }
   }
@@ -815,7 +816,7 @@ export async function analyzeWithOCR(
           return !rng || (n >= rng[0] && n <= rng[1]);
         });
         const numWord = before[before.length - 1];
-        if (numWord) { recordHit(pat, labelWord, numWord); break outer; }
+        if (numWord) { recordHit(pat, labelWord, numWord, 3); break outer; }
       }
     }
   }
@@ -858,11 +859,11 @@ export async function analyzeWithOCR(
   // bounding box [xMin, xMax, yMin, yMax] within the printout.
   // Each device has a confirmed panel layout (see PARAM_SITES above).
   for (const [name, d] of found) {
+    if (d.pass === 0) continue;          // Pass 0: same-line label=value, no spatial filter needed
     const sites = PARAM_SITES[name];
     if (!sites) continue;
     const bounds = sites[device];
     if (!bounds) continue;
-    // bounds = [xMin, xMax, yMin, yMax]
     if (d.x < bounds[0] || d.x > bounds[1] || d.y < bounds[2] || d.y > bounds[3]) {
       found.delete(name);
     }
