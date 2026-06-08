@@ -144,8 +144,8 @@ const DEVICE_PANEL: Partial<Record<string, [number, number]>> = {
 //   Col C — K Readings  (x 0.48–0.75):
 //     Multiple Ø zones: K1, K2, Avg, Cyl  (K1/K2 blocked for Sirius via DEVICE_BLOCK)
 //
-//   Col D — Sim-K + additional K  (x 0.60–0.85):
-//     [y 0.00–0.30] Sim-K              : SimK1, SimK2, Astigmatism
+//   Col C/D overlap — Sim-K rows within K readings table (x 0.40–0.70, y 0.28–0.62):
+//     Sim.K1, Sim.K2, Astigmatism (cyl)
 //
 //   Col E — Summary Indices  (x 0.68–1.00):
 //     [y 0.40–0.58] HVID               : WTW
@@ -174,7 +174,7 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   'Anterior Elevation': { Pentacam: [0.40, 1.00, 0.08, 0.62] },
   // Q value: Pentacam UL Box 2B / Sirius Shape Indices Col B (anterior) / Galilei Box 3A.
   // Sirius xMin=0.40 targets Col B Shape Indices where the asphericity value lives.
-  // The "Q = 4.5mm" zone label in Col A Refractive Analysis reads as 4.5 → fails RANGES[-3,1].
+  // The "Q = 4.5mm" zone label in Col A Refractive Analysis reads as 4.5 → fails RANGES[-3,3].
   'Q value':  { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.40, 0.68, 0.00, 0.58], Galilei: [0.38, 1.00, 0.05, 0.45] },
   // Q Post: Pentacam Box 2C / Sirius Shape Indices Col B (posterior section)
   'Q Post':   { Pentacam: [0.00, 0.58, 0.30, 0.65], Sirius: [0.40, 0.68, 0.30, 0.78] },
@@ -199,10 +199,11 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   // ── Pentacam lower-right: Kmax + posterior elevation ───────────────────────
   'Kmax':               { Pentacam: [0.40, 1.00, 0.08, 0.97] },
   'Posterior Elevation':{ Pentacam: [0.40, 1.00, 0.52, 0.97] },
-  // ── Sirius Sim-K (Col D top, x=0.60-1.00, y=0.00-0.30) ─────────────────────
-  // Restrict to top-right section; prevents confusion with centre K-readings columns.
-  'SimK1': { Sirius: [0.60, 1.00, 0.00, 0.30] },
-  'SimK2': { Sirius: [0.60, 1.00, 0.00, 0.30] },
+  // ── Sirius Sim-K (K readings table mid-area, x=0.40-0.70, y=0.28-0.62) ──────
+  // The Sim.K1/Sim.K2 labels appear inside the K readings table at roughly the
+  // centre-left of the data panel; restrict away from the col-E summary indices.
+  'SimK1': { Sirius: [0.40, 0.70, 0.28, 0.62] },
+  'SimK2': { Sirius: [0.40, 0.70, 0.28, 0.62] },
   // ── Sirius KC Screening Col A: KI / ARIndex ──────────────────────────────────
   // KI is DEVICE_BLOCK'd for Sirius; ARIndex kept for completeness.
   'KI':      { Sirius: [0.33, 0.55, 0.00, 0.45] },
@@ -300,7 +301,7 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'PPI-Avg': [0, 5], 'PPI-Min': [0, 5], 'PRFI': [0, 30],
   'KISA%': [0, 2000], 'SRAX': [0, 360], 'SAI': [0, 10], 'SRI': [0, 10],
   'WTW': [8, 16], 'ACD': [1, 6], 'Corneal Volume': [20, 130],
-  'Astigmatism': [-15, 15], 'Q value': [-3, 1], 'Q Post': [-3, 1],
+  'Astigmatism': [-15, 15], 'Q value': [-3, 3], 'Q Post': [-3, 3],
   'HOA RMS': [0, 10], 'Coma': [0, 5], 'Trefoil': [0, 5], 'Spherical Aberration': [-2, 2],
   'I-S value': [-20, 20], 'LSA': [0, 10],
   'RMS Ant': [0, 20], 'RMS Post': [0, 20],
@@ -322,7 +323,9 @@ const PARAM_UNIT_RE: Partial<Record<string, RegExp>> = {
   'K1':    /^d$/i,  'K2':    /^d$/i,  'Kmax':   /^d$/i,  'Km':    /^d$/i,
   'SimK1': /^d$/i,  'SimK2': /^d$/i,  'Flat K': /^d$/i,  'Steep K': /^d$/i,
   'Astigmatism': /^d$/i,
-  'Q value': /^d$/i,  'Q Post': /^d$/i,
+  // Q value / Q Post are dimensionless — no unit requirement. Omitting these entries
+  // allows Pass 0 to find "Q = 1.21" directly; otherwise the /^d$/i check blocks Pass 0
+  // and forces Pass 1/2 where "Q" may land on a merged OCR line (wrong box position).
   'SIf': /^d$/i,  'SIb': /^d$/i,
   'BCVf': /^d$/i, 'BCVb': /^d$/i,
   'KVf': /^[µuμ]?m$/i, 'KVb': /^[µuμ]?m$/i,
