@@ -40,6 +40,34 @@ export function ResultSummary({ result }: Props) {
   const abnormal = result.parameters.filter((p) => p.status === 'abnormal');
   const borderline = result.parameters.filter((p) => p.status === 'borderline');
 
+  // ── No parameters extracted ──────────────────────────────────────────────────
+  if (result.parameters.length === 0) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-xl border-2 p-5 bg-gray-100 border-gray-400">
+          <div className="flex items-center gap-3 mb-2">
+            <span className="text-2xl font-black text-gray-500">?</span>
+            <div className="font-black text-lg tracking-wide text-gray-700">
+              NO DATA EXTRACTED
+            </div>
+          </div>
+          <p className="text-sm leading-relaxed text-gray-600">
+            The OCR could not extract any parameters from this image.
+          </p>
+          <ul className="mt-2 text-sm text-gray-600 space-y-1 list-disc list-inside">
+            <li>Photograph <strong>only the numbers table</strong> — not the colour maps</li>
+            <li>Crop tightly to the data panel (K readings, Shape indices, Summary)</li>
+            <li>Hold the phone closer — the text must be large enough to read</li>
+            <li>Avoid shadows and ensure the page is flat and well-lit</li>
+          </ul>
+        </div>
+        <div className="text-xs text-gray-400 text-center leading-relaxed">
+          For research and educational use only. Not a substitute for clinical examination.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* Risk banner */}
