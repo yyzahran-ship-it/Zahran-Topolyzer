@@ -33,7 +33,8 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   // Sirius ARIndex (Asymmetry/Regularity Index) — appears below KI in KCS right panel
   { regex: /\bar\s*index\b|\bari\b/i,                            name: 'ARIndex',             unit: ''    },
   { regex: /\bc\.?\s*k\.?\s*i\b/i,                                name: 'CKI',                 unit: ''    },
-  { regex: /\bi\.?\s*h\.?\s*a\b/i,                                name: 'IHA',                 unit: '°'   },
+  // IHA: Index of Height Asymmetry — measured in µm (normal < 19 µm per OCULUS atlas §5.3)
+  { regex: /\bi\.?\s*h\.?\s*a\b/i,                                name: 'IHA',                 unit: 'µm'  },
   { regex: /\bi\.?\s*h\.?\s*d\b/i,                                name: 'IHD',                 unit: ''    },
   { regex: /\br\.?\s*m\.?\s*i\.?\s*n\b|r\s*min/i,                name: 'Rmin',                unit: 'mm'  },
   { regex: /a\.?\s*r\.?\s*t\.?\s*-?\s*max|artmax/i,              name: 'ART-Max',             unit: ''    },
@@ -43,8 +44,9 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /\bs\.?\s*r\.?\s*a\.?\s*x\b/i,                        name: 'SRAX',                unit: '°'   },
   { regex: /\bs\.?\s*a\.?\s*i\b/i,                                name: 'SAI',                 unit: ''    },
   { regex: /\bs\.?\s*r\.?\s*i\b/i,                                name: 'SRI',                 unit: ''    },
-  // Sirius: HIVD = Horizontal Iris Visible Diameter (same as WTW); label is "HIVD" not "HVID"
-  { regex: /\bw\.?\s*t\.?\s*w\b|white.to.white|\bhvid\b|\bhivd\b/i,       name: 'WTW',                 unit: 'mm'  },
+  // Sirius: HIVD = Horizontal Iris Visible Diameter; label is "HIVD" not "HVID"
+  // Pentacam: HWTW = Horizontal White-To-White (atlas §2.1, §8.3 — mandatory for ICL sizing)
+  { regex: /\bw\.?\s*t\.?\s*w\b|white.to.white|\bhvid\b|\bhivd\b|\bhwtw\b/i, name: 'WTW',              unit: 'mm'  },
   // ACD: "ACD:" / "AC Depth:" / "AC Depth (Endo):" (Sirius triple-confirmation spec)
   // ACD: "ACD:" / "HACD:" (Sirius label) / "AC Depth:" / "AC Depth (Endo):"
   { regex: /\ba\.?\s*c\.?\s*d\b|\bhacd\b|ac\s+depth(?:\s*\([^)]*\))?/i, name: 'ACD',              unit: 'mm'  },
@@ -117,6 +119,17 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   // PPI: Pellucid Probability Index on Sirius (0–100 %). Negative lookahead excludes
   // Pentacam's "PPI-Avg" / "PPI-Min" (Pachymetric Progression Index).
   { regex: /\bppi\b(?!\s*-)/i,                                      name: 'PPI',                 unit: '%'   },
+  // ── Pentacam-specific parameters (OCULUS atlas §2.1, §5.3, §6.4, §1.3) ─────────
+  // TCRP: Total Corneal Refractive Power — uses both surfaces + ray tracing (atlas §11.1).
+  // Appears in Cataract Pre-OP display (position 2/3) and FSO display.
+  { regex: /\btcrp\b|total\s*corneal\s*ref\w*/i,                    name: 'TCRP',                unit: 'D'   },
+  // AXL: Axial Length via PCI — Pentacam AXL / AXL Wave models only (atlas §1.3).
+  // Displayed in 4-map position 4 (AC parameters box) alongside ACD/HWTW.
+  { regex: /\baxl\b|axial\s+len\w*/i,                               name: 'AXL',                 unit: 'mm'  },
+  // B/F Ratio: Back/Front corneal radii ratio — normal ~82%; < 75.9% post-myopic LVC (atlas §6.6).
+  { regex: /\bb\s*\/\s*f\s*ratio|\bb\/f\b/i,                        name: 'B/F Ratio',           unit: '%'   },
+  // TKC: Topographic KC Classification — overall stage 0–4 on Topometric display (atlas §5.3).
+  { regex: /\btkc\b/i,                                               name: 'TKC',                 unit: ''    },
 ];
 
 interface Word {
@@ -226,7 +239,10 @@ const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number
   // ── Biometry: ACD, WTW, AC Volume, AC Angle, Pupil Diameter ───────────────
   // Sirius: all in Summary Indices Col E (x=0.68-1.00), stacked top-to-bottom.
   'ACD':          { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.74, 1.00], Galilei: [0.38, 1.00, 0.60, 0.88] },
-  'WTW':          { Sirius: [0.68, 1.00, 0.38, 0.60], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  // HWTW is in the AC parameters box of the 4-map display (lower-left, position 4 per atlas §2.1).
+  'WTW':          { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.38, 0.60], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  // AXL: in the same AC parameters box as ACD/HWTW on the 4-map display.
+  'AXL':          { Pentacam: [0.00, 0.58, 0.52, 0.97] },
   'AC Volume':    { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.77, 1.00], Galilei: [0.38, 1.00, 0.60, 0.88] },
   'AC Angle':     { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.77, 1.00], Galilei: [0.38, 1.00, 0.60, 0.88] },
   'Pupil Diameter':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.44, 0.72], Galilei: [0.38, 1.00, 0.60, 0.88] },
@@ -311,9 +327,11 @@ const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
   // Sirius's "Sim-k + K1-row" two-line layout — blocking avoids spurious hits elsewhere.
   // Sirius: KPI and PPI DO exist (Phoenix manual §5.6.3); removing them from block.
   // PPK is Galilei-only. KI/CKI/IHA/IHD/BAD-D/ISV/IVA/Rmin are Pentacam-only.
+  // TCRP/AXL/B-F Ratio/TKC are Pentacam-only (OCULUS atlas §2.1, §5.3, §6.4, §1.3).
   'Sirius': new Set(['SimK1', 'SimK2',
                      'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin',
                      'CLMIaa', 'PPK',
+                     'TCRP', 'AXL', 'B/F Ratio', 'TKC',
                      'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
   // Pentacam: no Sirius BCV/KV/SI/Rbf/TL/C40/SD/PPI; no Galilei/Orbscan specifics.
   'Pentacam': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
@@ -325,12 +343,14 @@ const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
                       'BCV', 'Rbf', 'TL', 'C40', 'SD', 'PPI',
                       'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA',
                       'RMS Ant', 'RMS Post', 'Apex Curvature',
+                      'TCRP', 'AXL', 'B/F Ratio', 'TKC',
                       'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
   // Orbscan: no Sirius/Pentacam/Galilei indices; Irregularity/BFS Ratio are Orbscan-specific.
   'Orbscan': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
                       'BCV', 'Rbf', 'TL', 'C40', 'SD', 'PPI',
                       'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA',
-                      'RMS Ant', 'RMS Post', 'Apex Curvature', 'CLMIaa']),
+                      'RMS Ant', 'RMS Post', 'Apex Curvature', 'CLMIaa',
+                      'TCRP', 'AXL', 'B/F Ratio', 'TKC']),
 };
 
 // Plausible value ranges — values outside are rejected as mis-reads
@@ -343,7 +363,8 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'KVf': [0, 200], 'KVb': [0, 200],
   'BCVf': [0, 15], 'BCVb': [0, 15],
   'ISV': [0, 300], 'IVA': [0, 3], 'KI': [0.5, 2.5], 'CKI': [0, 2], 'ARIndex': [0, 2],
-  'IHA': [0, 360], 'IHD': [0, 0.5], 'Rmin': [3, 10], 'ART-Max': [0, 600],
+  // IHA in µm per OCULUS atlas §5.3 (normal < 19 µm; extreme KC < 200 µm)
+  'IHA': [0, 200], 'IHD': [0, 0.5], 'Rmin': [3, 10], 'ART-Max': [0, 600],
   'SIf': [-3, 3], 'SIb': [-1.5, 1.5], 'DSI': [-10, 300], 'OSI': [0, 300],
   'CSI': [0, 300], 'IAI': [0, 300], 'AAI': [0, 300],
   'PPI-Avg': [0, 5], 'PPI-Min': [0, 5], 'PRFI': [0, 30],
@@ -365,6 +386,11 @@ const RANGES: Partial<Record<string, [number, number]>> = {
   'Eccentricity': [0, 2], 'AC Angle': [5, 60],
   'KPI': [0, 100], 'PPK': [0, 100], 'CLMIaa': [0, 10],
   'Irregularity 3mm': [0, 10], 'Irregularity 5mm': [0, 10], 'BFS Ratio': [0.8, 1.5],
+  // Pentacam-specific parameters (OCULUS atlas)
+  'TCRP': [30, 70],        // Total Corneal Refractive Power (D) — both surfaces, ray-traced
+  'AXL': [18, 33],         // Axial length (mm) — PCI; P<2% outside 21–28 mm (atlas §12.8)
+  'B/F Ratio': [50, 120],  // Back/Front radii ratio (%); normal ~82%; < 75.9% = post-myopic LVC
+  'TKC': [0, 4],           // Topographic KC Classification stage
 };
 
 // Unit-anchored validation (inspired by OpenCV/Pytesseract reference implementation).
@@ -405,6 +431,10 @@ const PARAM_UNIT_RE: Partial<Record<string, RegExp>> = {
   'Rbf': /^mm$/i,
   'BCV': /^[µuμ]?m$/i, 'TL': /^[µuμ]?m$/i, 'C40': /^[µuμ]?m$/i,
   'SD': /^d$/i,
+  // Pentacam-specific (OCULUS atlas §5.3, §1.3, §11.1)
+  'IHA': /^[µuμ]m|um|μm$/i,  // Index of Height Asymmetry in µm
+  'TCRP': /^d$/i,             // Total Corneal Refractive Power in D
+  'AXL': /^mm$/i,             // Axial length in mm
 };
 
 // Extract numeric value from OCR'd text — tolerates units attached to digits
