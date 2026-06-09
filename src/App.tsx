@@ -1,14 +1,25 @@
 import { useCallback, useState } from 'react';
 import { Header } from './components/Header';
-import { ImageUploader } from './components/ImageUploader';
+import { ImageUploader, type AcceptedFile } from './components/ImageUploader';
 import { AnnotatedCanvas } from './components/AnnotatedCanvas';
 import { ParameterTable } from './components/ParameterTable';
 import { ResultSummary } from './components/ResultSummary';
 import { analyzeWithOCR } from './lib/ocrAnalyzer';
+import { analyzeFromPDF } from './lib/pdfAnalyzer';
+import { analyzeFromCSV, analyzeFromXML } from './lib/structuredAnalyzer';
 import type { AnalysisResult } from './types/topography';
+
+// Human-readable source label shown in the results bar
+const SOURCE_LABELS: Record<AcceptedFile['kind'], string> = {
+  image: 'OCR (photo / screenshot)',
+  pdf:   'PDF text layer',
+  csv:   'CSV export',
+  xml:   'XML export',
+};
 
 export default function App() {
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
+  const [sourceKind, setSourceKind] = useState<AcceptedFile['kind'] | null>(null);
 
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState('');
@@ -16,24 +27,40 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [hoveredParam, setHoveredParam] = useState<string | null>(null);
 
-  const handleImage = useCallback(
-    (_base64: string, _mime: string, dataUrl: string) => {
-      setImageDataUrl(dataUrl);
-      setResult(null);
-      setError(null);
-      setProgress('');
+  const handleFile = useCallback((accepted: AcceptedFile) => {
+    setResult(null);
+    setError(null);
+    setProgress('');
+    setSourceKind(accepted.kind);
 
-      setAnalyzing(true);
-      analyzeWithOCR(dataUrl, setProgress)
-        .then((r) => setResult(r))
-        .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-        .finally(() => setAnalyzing(false));
-    },
-    []
-  );
+    if (accepted.kind === 'image') {
+      setImageDataUrl(accepted.dataUrl);
+    } else {
+      setImageDataUrl(null);
+    }
+
+    setAnalyzing(true);
+
+    let promise: Promise<AnalysisResult>;
+    if (accepted.kind === 'image') {
+      promise = analyzeWithOCR(accepted.dataUrl, setProgress);
+    } else if (accepted.kind === 'pdf') {
+      promise = analyzeFromPDF(accepted.file, setProgress);
+    } else if (accepted.kind === 'csv') {
+      promise = accepted.file.text().then(t => analyzeFromCSV(t, setProgress));
+    } else {
+      promise = accepted.file.text().then(t => analyzeFromXML(t, setProgress));
+    }
+
+    promise
+      .then((r) => setResult(r))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setAnalyzing(false));
+  }, []);
 
   const reset = () => {
     setImageDataUrl(null);
+    setSourceKind(null);
     setResult(null);
     setError(null);
     setProgress('');
@@ -52,7 +79,7 @@ export default function App() {
               <div className="absolute inset-0 rounded-full border-4 border-sky-200"></div>
               <div className="absolute inset-0 rounded-full border-4 border-sky-600 border-t-transparent animate-spin"></div>
             </div>
-            <p className="font-semibold text-gray-700">{progress || 'Scanning image…'}</p>
+            <p className="font-semibold text-gray-700">{progress || 'Analysing…'}</p>
             <p className="text-sm text-gray-500">Extracting parameters from your topography report.</p>
           </div>
         )}
@@ -70,7 +97,7 @@ export default function App() {
               <p className="text-sm text-red-600 mt-1 whitespace-pre-line">{error}</p>
             </div>
             <button onClick={reset} className="text-sm text-red-700 hover:text-red-900 font-semibold underline flex-shrink-0">
-              Try another image
+              Try another file
             </button>
           </div>
         )}
@@ -85,6 +112,7 @@ export default function App() {
                   {result.parameters.length} parameter{result.parameters.length !== 1 ? 's' : ''} found
                   {result.device && result.device !== 'Unknown' ? ` · ${result.device}` : ''}
                   {result.eye && result.eye !== 'unknown' ? ` · ${result.eye}` : ''}
+                  {sourceKind ? ` · ${SOURCE_LABELS[sourceKind]}` : ''}
                 </p>
               </div>
               <button
@@ -99,7 +127,7 @@ export default function App() {
               </button>
             </div>
 
-            <div className="grid gap-6 grid-cols-1 lg:grid-cols-2">
+            <div className={`grid gap-6 ${imageDataUrl ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'}`}>
               {imageDataUrl && (
                 <div className="space-y-4">
                   <h3 className="font-semibold text-gray-800">Annotated Image
@@ -126,10 +154,12 @@ export default function App() {
         {!result && !analyzing && !error && (
           <div className="max-w-xl mx-auto w-full space-y-4">
             <div className="text-center">
-              <h2 className="font-semibold text-gray-800">Topography Report Scanner</h2>
-              <p className="text-sm text-gray-500 mt-1">Upload a screenshot — parameters are extracted automatically</p>
+              <h2 className="font-semibold text-gray-800">Topography Report Analyzer</h2>
+              <p className="text-sm text-gray-500 mt-1">
+                Upload a screenshot, PDF export, CSV, or XML file — parameters extracted automatically
+              </p>
             </div>
-            <ImageUploader onImage={handleImage} />
+            <ImageUploader onFile={handleFile} />
           </div>
         )}
 

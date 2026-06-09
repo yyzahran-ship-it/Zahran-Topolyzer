@@ -2,7 +2,7 @@ import { createWorker } from 'tesseract.js';
 import { buildResult } from './classify';
 import type { AnalysisResult } from '../types/topography';
 
-const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
+export const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /k\s*-?\s*max|kmax/i,                                  name: 'Kmax',                unit: 'D'   },
   // Sirius: "K1 = X D" in K readings, "rf = X D" in Shape indices (anterior flat K)
   { regex: /\bk\s*f\b|\bk\s*1\b|flat\s*k|\brf\b/i,              name: 'K1',                  unit: 'D'   },
@@ -132,7 +132,7 @@ const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
   { regex: /\btkc\b/i,                                               name: 'TKC',                 unit: ''    },
 ];
 
-interface Word {
+export interface Word {
   text: string;
   confidence: number;
   bbox: { x0: number; y0: number; x1: number; y1: number };
@@ -319,7 +319,7 @@ const EXCLUDED_VALUES: Partial<Record<string, Set<number>>> = {
 // Sirius uses SIf/SIb/KVf/KVb/BCVf/BCVb for KC screening — it does NOT report the
 // Pentacam-style KI, CKI, IHD, IHA, PRFI, or BAD-D indices.
 // Including them would produce false positives from incidental text on Sirius printouts.
-const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
+export const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
   // Sirius K readings: K1/K2/Km are now NOT blocked — the Sim-k section in the K readings
   // table uses plain "K1" / "K2" row labels. RANGES[30,65] already rejects the adjacent
   // posterior K values (K1=-6.xx D, K2=-7.xx D), and PARAM_SITES further gates them to the
@@ -354,7 +354,7 @@ const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
 };
 
 // Plausible value ranges — values outside are rejected as mis-reads
-const RANGES: Partial<Record<string, [number, number]>> = {
+export const RANGES: Partial<Record<string, [number, number]>> = {
   'K1': [30, 65], 'K2': [30, 65], 'Kmax': [30, 70], 'Km': [30, 65],
   'SimK1': [30, 65], 'SimK2': [30, 65], 'Flat K': [30, 65], 'Steep K': [30, 65],
   'CCT': [200, 850], 'Thinnest Point': [200, 850], 'Pachymetry Min': [200, 850],
@@ -876,8 +876,8 @@ function joinSplitDecimals(words: Word[]): Word[] {
 }
 
 // ── Shared parameter-matching logic ───────────────────────────────────────────
-// Called by both analyzeWithOCR (Tesseract path) and analyzeWithMLKitBridge.
-function matchParameters(
+// Called by analyzeWithOCR (Tesseract/MLKit) and pdfAnalyzer (text-layer extraction).
+export function matchParameters(
   wordsIn: Word[],
   imgWidth: number,
   imgHeight: number,
