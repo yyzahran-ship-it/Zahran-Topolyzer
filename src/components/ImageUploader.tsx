@@ -1,30 +1,51 @@
 import { useCallback, useRef, useState } from 'react';
 
+export type AcceptedFile =
+  | { kind: 'image'; file: File; dataUrl: string }
+  | { kind: 'pdf';   file: File }
+  | { kind: 'csv';   file: File }
+  | { kind: 'xml';   file: File };
+
 interface Props {
-  onImage: (base64: string, mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif', previewUrl: string) => void;
+  onFile: (f: AcceptedFile) => void;
   disabled?: boolean;
 }
 
-const ACCEPTED = 'image/jpeg,image/png,image/webp,image/gif';
+const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,application/pdf,.pdf,.csv,.xml,.pen,.xpt';
 
-export function ImageUploader({ onImage, disabled }: Props) {
+function classify(file: File): AcceptedFile['kind'] | null {
+  if (IMAGE_TYPES.has(file.type)) return 'image';
+  if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) return 'pdf';
+  if (file.type === 'text/csv' || file.name.endsWith('.csv')) return 'csv';
+  if (
+    file.type === 'text/xml' || file.type === 'application/xml' ||
+    /\.(xml|pen|xpt)$/i.test(file.name)
+  ) return 'xml';
+  return null;
+}
+
+export function ImageUploader({ onFile, disabled }: Props) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const processFile = useCallback(
     (file: File) => {
-      if (!file.type.startsWith('image/')) return;
-      const mime = file.type as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const dataUrl = e.target?.result as string;
-        const base64 = dataUrl.split(',')[1];
-        const previewUrl = URL.createObjectURL(file);
-        onImage(base64, mime, previewUrl);
-      };
-      reader.readAsDataURL(file);
+      const kind = classify(file);
+      if (!kind) return;
+
+      if (kind === 'image') {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const dataUrl = e.target?.result as string;
+          onFile({ kind: 'image', file, dataUrl });
+        };
+        reader.readAsDataURL(file);
+      } else {
+        onFile({ kind, file } as AcceptedFile);
+      }
     },
-    [onImage]
+    [onFile],
   );
 
   const handleDrop = useCallback(
@@ -34,20 +55,20 @@ export function ImageUploader({ onImage, disabled }: Props) {
       const file = e.dataTransfer.files[0];
       if (file) processFile(file);
     },
-    [processFile]
+    [processFile],
   );
 
   const handlePaste = useCallback(
     (e: React.ClipboardEvent) => {
-      const item = Array.from(e.clipboardData.items).find((i) =>
-        i.type.startsWith('image/')
+      const item = Array.from(e.clipboardData.items).find(
+        (i) => i.type.startsWith('image/'),
       );
       if (item) {
         const file = item.getAsFile();
         if (file) processFile(file);
       }
     },
-    [processFile]
+    [processFile],
   );
 
   return (
@@ -71,7 +92,7 @@ export function ImageUploader({ onImage, disabled }: Props) {
       <input
         ref={inputRef}
         type="file"
-        accept={ACCEPTED}
+        accept={ACCEPT}
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
@@ -91,7 +112,7 @@ export function ImageUploader({ onImage, disabled }: Props) {
 
         <div>
           <p className="text-base font-semibold text-gray-700">
-            Drop a topography screenshot here
+            Drop a topography file here
           </p>
           <p className="text-sm text-gray-500 mt-1">
             or click to browse · or paste with Ctrl+V
@@ -99,8 +120,14 @@ export function ImageUploader({ onImage, disabled }: Props) {
         </div>
 
         <div className="flex flex-wrap justify-center gap-2 text-xs text-gray-400">
-          {['Pentacam', 'Sirius', 'Galilei', 'Orbscan', 'Atlas', 'Keratograph'].map((d) => (
-            <span key={d} className="bg-gray-100 rounded-full px-3 py-1">{d}</span>
+          {['Screenshot / Photo', 'PDF Export', 'CSV Export', 'XML / .pen'].map((t) => (
+            <span key={t} className="bg-gray-100 rounded-full px-3 py-1">{t}</span>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap justify-center gap-1.5 text-xs text-gray-400 mt-1">
+          {['Pentacam', 'Sirius', 'Galilei', 'Orbscan', 'Atlas'].map((d) => (
+            <span key={d} className="bg-sky-50 text-sky-700 rounded-full px-2.5 py-0.5">{d}</span>
           ))}
         </div>
       </div>

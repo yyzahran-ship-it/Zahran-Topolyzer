@@ -3,9 +3,10 @@ import { useState } from 'react';
 interface Props {
   onSave: (key: string) => void;
   currentKey?: string;
+  onClose?: () => void;
 }
 
-export function ApiKeyInput({ onSave, currentKey }: Props) {
+export function ApiKeyInput({ onSave, currentKey, onClose }: Props) {
   const [value, setValue] = useState(currentKey ?? '');
   const [visible, setVisible] = useState(false);
 
@@ -16,7 +17,14 @@ export function ApiKeyInput({ onSave, currentKey }: Props) {
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 relative">
+        {onClose && (
+          <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-5 h-5">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        )}
         <div className="flex items-center gap-3 mb-6">
           <div className="w-12 h-12 bg-sky-100 rounded-xl flex items-center justify-center">
             <svg viewBox="0 0 24 24" fill="none" stroke="#0369a1" strokeWidth="2" className="w-6 h-6">

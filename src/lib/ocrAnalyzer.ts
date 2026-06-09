@@ -1,0 +1,1177 @@
+import { createWorker } from 'tesseract.js';
+import { buildResult } from './classify';
+import type { AnalysisResult } from '../types/topography';
+
+export const PARAM_PATTERNS: { regex: RegExp; name: string; unit: string }[] = [
+  { regex: /k\s*-?\s*max|kmax/i,                                  name: 'Kmax',                unit: 'D'   },
+  // Sirius: "K1 = X D" in K readings, "rf = X D" in Shape indices (anterior flat K)
+  { regex: /\bk\s*f\b|\bk\s*1\b|flat\s*k|\brf\b/i,              name: 'K1',                  unit: 'D'   },
+  // Sirius: "K2 = X D" in K readings, "rs = X D" in Shape indices (anterior steep K)
+  { regex: /\bk\s*s\b|\bk\s*2\b|steep\s*k|\brs\b/i,             name: 'K2',                  unit: 'D'   },
+  // "Avg" is the Sirius Sim-K label for mean K. Posterior K "Avg" ≈ −6 D → rejected by RANGES [30,65].
+  { regex: /\bk\s*m\b|mean\s*k|\bavg\b/i,                        name: 'Km',                  unit: 'D'   },
+  { regex: /sim\.?\s*k\s*1|simk1/i,                               name: 'SimK1',               unit: 'D'   },
+  { regex: /sim\.?\s*k\s*2|simk2/i,                               name: 'SimK2',               unit: 'D'   },
+  { regex: /\bc\.?\s*c\.?\s*t\b|central\s*corneal\s*thick/i,      name: 'CCT',                 unit: 'µm'  },
+  // Sirius KCS labels thinnest as "Min Thickness: XXX µm"; other devices use "Thinnest" or "Thk"
+  { regex: /thinn?e?s?t?\s*(p?o?i?n?t?|loc\w*)|\bthk\b|min\.?\s*pachy|\bmin\.?\s+thick/i, name: 'Thinnest Point', unit: 'µm' },
+  { regex: /ant\.?\s*el?ev|front\s*el?ev/i,                       name: 'Anterior Elevation',  unit: 'µm'  },
+  { regex: /post\.?\s*el?ev|back\s*el?ev/i,                       name: 'Posterior Elevation', unit: 'µm'  },
+  // Sirius KC elevation indices — KVf/KVb appear in the KC Indices panel as "KVf = X µm"
+  // KVb is the most sensitive Sirius KC indicator (atlas: normal < 8 µm)
+  { regex: /\bkv\s*f\b/i,                                         name: 'KVf',                 unit: 'µm'  },
+  { regex: /\bkv\s*b\b/i,                                         name: 'KVb',                 unit: 'µm'  },
+  // Sirius BCV indices — "BCVf = X D @ Y°" in Keratoconus screening panel
+  { regex: /\bbcv\s*f\b/i,                                        name: 'BCVf',                unit: 'D'   },
+  { regex: /\bbcv\s*b\b/i,                                        name: 'BCVb',                unit: 'D'   },
+  { regex: /b\.?\s*a\.?\s*d\.?\s*-?\s*d\b|bad\s*d/i,             name: 'BAD-D',               unit: ''    },
+  { regex: /\bt\.?\s*b\.?\s*i\b/i,                                name: 'TBI',                 unit: ''    },
+  { regex: /\bc\.?\s*b\.?\s*i\b/i,                                name: 'CBI',                 unit: ''    },
+  { regex: /\bi\.?\s*s\.?\s*v\b/i,                                name: 'ISV',                 unit: ''    },
+  { regex: /\bi\.?\s*v\.?\s*a\b/i,                                name: 'IVA',                 unit: ''    },
+  { regex: /\bk\.?\s*i\b(?!s)/i,                                  name: 'KI',                  unit: ''    },
+  // Sirius ARIndex (Asymmetry/Regularity Index) — appears below KI in KCS right panel
+  { regex: /\bar\s*index\b|\bari\b/i,                            name: 'ARIndex',             unit: ''    },
+  { regex: /\bc\.?\s*k\.?\s*i\b/i,                                name: 'CKI',                 unit: ''    },
+  // IHA: Index of Height Asymmetry — measured in µm (normal < 19 µm per OCULUS atlas §5.3)
+  { regex: /\bi\.?\s*h\.?\s*a\b/i,                                name: 'IHA',                 unit: 'µm'  },
+  { regex: /\bi\.?\s*h\.?\s*d\b/i,                                name: 'IHD',                 unit: ''    },
+  { regex: /\br\.?\s*m\.?\s*i\.?\s*n\b|r\s*min/i,                name: 'Rmin',                unit: 'mm'  },
+  { regex: /a\.?\s*r\.?\s*t\.?\s*-?\s*max|artmax/i,              name: 'ART-Max',             unit: ''    },
+  { regex: /\bp\.?\s*r\.?\s*f\.?\s*i\b/i,                        name: 'PRFI',                unit: ''    },
+  { regex: /i\s*[\/\-]\s*s\s*(val|value)?/i,                      name: 'I-S value',           unit: 'D'   },
+  { regex: /\bkisa\s*%?/i,                                        name: 'KISA%',               unit: '%'   },
+  { regex: /\bs\.?\s*r\.?\s*a\.?\s*x\b/i,                        name: 'SRAX',                unit: '°'   },
+  { regex: /\bs\.?\s*a\.?\s*i\b/i,                                name: 'SAI',                 unit: ''    },
+  { regex: /\bs\.?\s*r\.?\s*i\b/i,                                name: 'SRI',                 unit: ''    },
+  // Sirius: HIVD = Horizontal Iris Visible Diameter; label is "HIVD" not "HVID"
+  // Pentacam: HWTW = Horizontal White-To-White (atlas §2.1, §8.3 — mandatory for ICL sizing)
+  { regex: /\bw\.?\s*t\.?\s*w\b|white.to.white|\bhvid\b|\bhivd\b|\bhwtw\b/i, name: 'WTW',              unit: 'mm'  },
+  // ACD: "ACD:" / "AC Depth:" / "AC Depth (Endo):" (Sirius triple-confirmation spec)
+  // ACD: "ACD:" / "HACD:" (Sirius label) / "AC Depth:" / "AC Depth (Endo):"
+  { regex: /\ba\.?\s*c\.?\s*d\b|\bhacd\b|ac\s+depth(?:\s*\([^)]*\))?/i, name: 'ACD',              unit: 'mm'  },
+  { regex: /corneal\s*vol/i,                                       name: 'Corneal Volume',      unit: 'mm³' },
+  // Q value anchors: "Q val", "Asphericity", "Q =", "Q:" (Sirius), "Q (8mm):" (Sirius)
+  { regex: /q[.\s]?val|aspherici?ty|\bq\s*=|\bq\s*\(\s*8\s*mm\s*\)\s*:|\bq\s*:/i, name: 'Q value', unit: '' },
+  { regex: /hoa\s*rms|total\s*hoa/i,                              name: 'HOA RMS',             unit: 'µm'  },
+  { regex: /\bcoma\b(?!\s*aberr?\b.*\bfree)/i,                   name: 'Coma',                unit: 'µm'  },
+  { regex: /\btrefoil\b/i,                                        name: 'Trefoil',             unit: 'µm'  },
+  { regex: /spherical\s*ab(err?)?|spher\.\s*ab|z4_0|z\s*4\s*0/i, name: 'Spherical Aberration', unit: 'µm' },
+  { regex: /\bs\.?\s*i\.?\s*f\b|si\s*-?\s*f\b/i,                 name: 'SIf',                 unit: 'D'   },
+  { regex: /\bs\.?\s*i\.?\s*b\b|si\s*-?\s*b\b/i,                 name: 'SIb',                 unit: 'D'   },
+  { regex: /\bd\.?\s*s\.?\s*i\b/i,                                name: 'DSI',                 unit: ''    },
+  { regex: /\bo\.?\s*s\.?\s*i\b/i,                                name: 'OSI',                 unit: ''    },
+  { regex: /\bc\.?\s*s\.?\s*i\b/i,                                name: 'CSI',                 unit: ''    },
+  { regex: /\bi\.?\s*a\.?\s*i\b/i,                                name: 'IAI',                 unit: ''    },
+  { regex: /\ba\.?\s*a\.?\s*i\b/i,                                name: 'AAI',                 unit: ''    },
+  { regex: /\bs\.?\s*d\.?\s*p\b/i,                                name: 'SDP',                 unit: ''    },
+  { regex: /astigmati?sm|\bcyl\b/i,                               name: 'Astigmatism',         unit: 'D'   },
+  { regex: /ppi\s*-?\s*avg/i,                                     name: 'PPI-Avg',             unit: ''    },
+  { regex: /ppi\s*-?\s*min/i,                                     name: 'PPI-Min',             unit: ''    },
+  { regex: /pachy\s*min|min\s*pachy/i,                            name: 'Pachymetry Min',      unit: 'µm'  },
+  { regex: /\bflat\b(?!\s*k)/i,                                   name: 'Flat K',              unit: 'D'   },
+  { regex: /\bsteep\b(?!\s*k)/i,                                  name: 'Steep K',             unit: 'D'   },
+  { regex: /\blsa\b/i,                                            name: 'LSA',                 unit: 'D'   },
+  // MPP: Mean Pupil Power — Sirius Refractive Analysis section
+  { regex: /\bmpp\b|mean\s+pupil\s+pow/i,                        name: 'MPP',                 unit: 'D'   },
+  // ── New Sirius Box 2C / 2E parameters ──────────────────────────────────────
+  // Q Post: posterior asphericity, distinct label from anterior Q
+  { regex: /\bq[\s.]*(post|back|posterior)\b/i,                  name: 'Q Post',              unit: ''    },
+  // Surface RMS (deviation from best-fit sphere) — Sirius Box 2C
+  // "RMS/A" is the Sirius label (no "ant"/"post" qualifier); PARAM_SITES y-range separates them.
+  { regex: /\brms\b.*\b(ant(erior)?|front)\b|\b(ant(erior)?|front)\b.*\brms\b|\brms\s*\/\s*a\b/i, name: 'RMS Ant', unit: 'µm' },
+  { regex: /\brms\b.*\b(post(erior)?|back)\b|\b(post(erior)?|back)\b.*\brms\b|\brms\s*\/\s*a\b/i, name: 'RMS Post', unit: 'µm' },
+  // rf / rs: flat and steep radii of curvature in Sirius Shape Indices (anterior section, in D)
+  { regex: /\brf\b/i,                                               name: 'Flat Radius',         unit: 'D'   },
+  { regex: /\brs\b/i,                                               name: 'Steep Radius',        unit: 'D'   },
+  // Apex Curvature: tangential map value at geometric apex
+  { regex: /apex\s+(curv(ature)?|tang\w*|steep)|\btang\w+\s+apex/i, name: 'Apex Curvature', unit: 'D' },
+  // Apex Thickness: "Apex Thickness", "Thickness at apex", or standalone "Apex:" (Sirius label)
+  // Negative lookahead excludes "Apex Curvature" / "Apex Tang" to avoid overlap with Apex Curvature.
+  { regex: /apex\s+thick(ness)?|thick(ness)?\s+(?:at\s+)?apex|\bapex\s*:(?!\s*(?:curv|tang|steep))/i, name: 'Apex Thickness', unit: 'µm' },
+  // Pupil Diameter from Sirius Box 2A — "Pupil dia.:" or "Pupil Ø:"
+  { regex: /pupil\s+(diam?(eter)?|dia\.?|size|ø|Ø)/i,            name: 'Pupil Diameter',      unit: 'mm'  },
+  // AC Volume — Sirius "Aq. Volume" / "AC Volume", Pentacam "Chamber Volume", Galilei "ACV"
+  { regex: /\ba\.?\s*c\.?\s*vol(ume)?|ant\w*\s+cham\w+\s+vol|chamber\s+vol(ume)?|\bacv\b|\baq\w*\.?\s+vol/i, name: 'AC Volume', unit: 'mm³' },
+  // ── Multi-device: Eccentricity (shape factor) + AC Angle ──────────────────
+  { regex: /\beccentricity\b|\be\s*\(\s*\d+(?:\.\d+)?\s*mm\s*\)/i, name: 'Eccentricity',       unit: ''    },
+  { regex: /\ba\.?\s*c\.?\s*angle\b|ant\w*\s+cham\w*\s+angle|mean\s+angle\b|\baqd\b|\btridocorneal(?:\s+angle)?\b/i, name: 'AC Angle', unit: '°' },
+  // ── Galilei Box 3E: KC probability indices ─────────────────────────────────
+  { regex: /\bkpi\b|k(?:eratoconus)?\s*prob\w*\s*index/i,          name: 'KPI',                 unit: '%'   },
+  { regex: /\bppk\b|pellucid.*prob|prob.*pellucid/i,                name: 'PPK',                 unit: '%'   },
+  { regex: /\bclmi(?:aa)?\b|cone\s+loc\w+\s+magn/i,                name: 'CLMIaa',              unit: 'D'   },
+  // ── Orbscan Box 3B: corneal irregularity + BFS ratio ──────────────────────
+  { regex: /irreg\w*\s*3\s*mm|3[\s.]?mm\s*irreg/i,                 name: 'Irregularity 3mm',    unit: 'D'   },
+  { regex: /irreg\w*\s*5\s*mm|5[\s.]?mm\s*irreg/i,                 name: 'Irregularity 5mm',    unit: 'D'   },
+  { regex: /bfs\s*ratio|ant\w*\s*bfs.*\/.*post\w*|post.*bfs.*ratio/i, name: 'BFS Ratio',        unit: ''    },
+  // ── Sirius KC screening panel (Phoenix manual §5.6) ──────────────────────────
+  // Rbf: apical radius of best-fit ellipsoid (KC screening). Label "Rbf" on-screen.
+  { regex: /\brbf\b/i,                                              name: 'Rbf',                 unit: 'mm'  },
+  // BCV: ectasia index from Zernike coma+trefoil (single composite index).
+  // Negative lookahead avoids matching BCVf / BCVb (different older-format labels).
+  { regex: /\bbcv\b(?!\s*[fb])/i,                                   name: 'BCV',                 unit: 'µm'  },
+  // TL: least (minimum) corneal thickness in KC screening panel.
+  { regex: /\btl\b/i,                                               name: 'TL',                  unit: 'µm'  },
+  // C40 / C(4,0): primary spherical aberration coefficient in KC screening.
+  { regex: /\bc\s*4\s*0\b|\bc\s*\(\s*4\s*,\s*0\s*\)\b/i,          name: 'C40',                 unit: 'µm'  },
+  // SD: Irregularity of curvature (standard deviation) in Optical quality indices.
+  { regex: /\bsd\b/i,                                               name: 'SD',                  unit: 'D'   },
+  // PPI: Pellucid Probability Index on Sirius (0–100 %). Negative lookahead excludes
+  // Pentacam's "PPI-Avg" / "PPI-Min" (Pachymetric Progression Index).
+  { regex: /\bppi\b(?!\s*-)/i,                                      name: 'PPI',                 unit: '%'   },
+  // ── Pentacam-specific parameters (OCULUS atlas §2.1, §5.3, §6.4, §1.3) ─────────
+  // TCRP: Total Corneal Refractive Power — uses both surfaces + ray tracing (atlas §11.1).
+  // Appears in Cataract Pre-OP display (position 2/3) and FSO display.
+  { regex: /\btcrp\b|total\s*corneal\s*ref\w*/i,                    name: 'TCRP',                unit: 'D'   },
+  // AXL: Axial Length via PCI — Pentacam AXL / AXL Wave models only (atlas §1.3).
+  // Displayed in 4-map position 4 (AC parameters box) alongside ACD/HWTW.
+  { regex: /\baxl\b|axial\s+len\w*/i,                               name: 'AXL',                 unit: 'mm'  },
+  // B/F Ratio: Back/Front corneal radii ratio — normal ~82%; < 75.9% post-myopic LVC (atlas §6.6).
+  { regex: /\bb\s*\/\s*f\s*ratio|\bb\/f\b/i,                        name: 'B/F Ratio',           unit: '%'   },
+  // TKC: Topographic KC Classification — overall stage 0–4 on Topometric display (atlas §5.3).
+  { regex: /\btkc\b/i,                                               name: 'TKC',                 unit: ''    },
+];
+
+export interface Word {
+  text: string;
+  confidence: number;
+  bbox: { x0: number; y0: number; x1: number; y1: number };
+}
+
+// ── Device-specific panel layout ─────────────────────────────────────────────
+// Coarse x-axis gate: remove words outside the device's data-table region.
+// Pentacam 4-map refractive uses ALL four quadrants across full width → [0.0, 1.0].
+// Sirius KCS right panel: parameters concentrated in x > 33 %.
+// Sources: Pentacam Interpretation Guide (Oculus, 2024); CSO Sirius Phoenix manual;
+//          corneal-topography-reader reference package (uploaded 2025-06)
+const DEVICE_PANEL: Partial<Record<string, [number, number]>> = {
+  'Pentacam': [0.00, 1.00],  // 4-map: K (UL), elevation (UR), pachy (LL), Kmax/post (LR)
+  'Sirius':   [0.33, 1.00],
+  'Galilei':  [0.38, 1.00],
+  'Orbscan':  [0.35, 1.00],  // data sidebar on right; 4-map body occupies left portion
+};
+
+// ── Per-parameter bounding box [xMin, xMax, yMin, yMax] per device ───────────
+// Image fractions (0–1). Generous ±10 % margins tolerate crops and firmware variants.
+//
+// Pentacam 4-Map Refractive (Oculus):
+//   Upper-left  (x 0–58%, y 8–62%): K1, K2, Km, Astigmatism, Q value, Eccentricity (Box 2B)
+//   Upper-left  (x 0–58%, y 30–65%): K1 back, Q Post, Eccentricity back (Box 2C)
+//   Lower-left  (x 0–58%, y 52–97%): CCT, Thinnest Point, Apex Thickness, Corneal Volume,
+//                                      Chamber Volume (= AC Volume), ACD, AC Angle (Box 2D)
+//   Upper-right (x 40–100%, y 8–62%): Anterior Elevation, Q value (Box 2B)
+//   Lower-right (x 40–100%, y 8–97%): Kmax, Posterior Elevation (lower-right)
+//   BAD/Topometric (separate screen): BAD-D, ART-Max, ISV, IVA …
+//
+// Sirius KCS — full landscape printout; left 33% = colour maps, right 67% = data panels.
+// x/y fractions are relative to the FULL printout width/height.
+//
+//   Col A — KC Screening + Refractive Analysis  (x 0.33–0.52):
+//     [y 0.00–0.30] Refractive Analysis : Astigmatism (Cyl), Q (zone label only)
+//     [y 0.30–0.65] KC front indices    : SIf, KVf, BCVf
+//     [y 0.52–0.90] KC back indices     : SIb, KVb, BCVb
+//     [y 0.74–0.88] KC vertex thickness : Thk (NOT used for Thinnest Point — see Col E)
+//
+//   Col B — Shape Indices  (x 0.42–0.66):
+//     [y 0.00–0.55] Anterior shape      : Q value (asphericity), RMS Ant
+//     [y 0.33–0.75] Posterior shape     : Q Post, RMS Post
+//
+//   Col C — K Readings  (x 0.48–0.75):
+//     Multiple Ø zones: K1, K2, Avg, Cyl  (K1/K2 blocked for Sirius via DEVICE_BLOCK)
+//
+//   Col C — K Readings top (x 0.40–0.68, y 0.28–0.62):
+//     Sim-k section: K1, K2, Astigmatism (Cyl) — extracted via K1/K2 patterns
+//
+//   Col E — Summary Indices  (x 0.68–1.00):
+//     [y 0.40–0.58] HVID               : WTW
+//     [y 0.46–0.72] Pupil (Topographic): Pupil Diameter
+//     [y 0.56–0.84] Thinnest location  : Thinnest Point ("Thk = µm"), Pachymetry Min
+//     [y 0.68–0.92] Apex               : Apex Curvature ("Curv = D")
+//     [y 0.76–1.00] Anterior chamber   : ACD (from "CCT+AD"), AC Volume, AC Angle, CCT
+//
+// Galilei Refractive Report — right panel (x > 38%), section stack (top → bottom):
+//   [0.05–0.45] Box 3A SimK : SimK1, SimK2, Astigmatism, Q value, Eccentricity
+//   [0.35–0.65] Box 3B Post K: K1, K2 (posterior)
+//   [0.45–0.75] Box 3C Pachy: CCT, Thinnest Point, Corneal Volume
+//   [0.60–0.88] Box 3D Biom : WTW, ACD, AC Angle, AC Volume, Pupil Diameter
+//   [0.75–1.00] Box 3E KC   : KPI, PPK, CLMIaa, SRI, SAI, I-S value
+const PARAM_SITES: Partial<Record<string, Partial<Record<string, [number, number, number, number]>>>> = {
+  // ── K readings: Pentacam/Galilei + Sirius Sim-k section ─────────────────────
+  // Sirius K1/K2 come from the Sim-k row of the K readings table (first row, x=0.40-0.68,
+  // y=0.28-0.62). Posterior K values (K1≈-6 D, K2≈-7 D) occupy adjacent columns on the
+  // SAME visual rows but always fail RANGES[30,65], so no extra guard is needed beyond
+  // PARAM_SITES. The Sim-k row always appears first (top of the table) so Pass 0 records
+  // the correct Sim-k value before reaching any other "K1 =" or "K2 =" row.
+  'K1':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45], Sirius: [0.40, 0.68, 0.28, 0.62] },
+  'K2':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45], Sirius: [0.40, 0.68, 0.28, 0.62] },
+  'Km':    { Pentacam: [0.00, 0.58, 0.08, 0.62], Galilei: [0.38, 1.00, 0.05, 0.45], Sirius: [0.40, 0.68, 0.28, 0.62] },
+  'Flat K':  { Pentacam: [0.00, 0.58, 0.08, 0.62] },
+  'Steep K': { Pentacam: [0.00, 0.58, 0.08, 0.62] },
+  // Sirius Astigmatism: from Cyl in K readings (Col C/D) or Refractive Analysis (Col A top).
+  'Astigmatism': { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.33, 0.85, 0.00, 0.65], Galilei: [0.38, 1.00, 0.05, 0.65] },
+  // MPP: Sirius Refractive Analysis section (Col D, x=0.52-0.85, upper rows y=0.00-0.30)
+  'MPP': { Sirius: [0.52, 0.85, 0.00, 0.30] },
+  // ── Pentacam upper-right: anterior elevation + Q ───────────────────────────
+  'Anterior Elevation': { Pentacam: [0.40, 1.00, 0.08, 0.62] },
+  // rf / rs: Sirius Shape Indices Col B, anterior section (top rows, above Q value).
+  // RANGES [30,70] rejects posterior surface values (~-6 to -7 D), no extra posterior guard needed.
+  'Flat Radius':  { Sirius: [0.40, 0.68, 0.00, 0.38] },
+  'Steep Radius': { Sirius: [0.40, 0.68, 0.00, 0.38] },
+  // Q value: Pentacam UL Box 2B / Sirius Shape Indices Col B (anterior) / Galilei Box 3A.
+  // Sirius xMin=0.40 targets Col B Shape Indices where the asphericity value lives.
+  // The "Q = 4.5mm" zone label in Col A Refractive Analysis reads as 4.5 → fails RANGES[-3,3].
+  // Sirius anterior Q lives in upper Shape Indices (y<0.44); posterior Q in lower half (y>0.45).
+  // Tightened from [0.00,0.58]/[0.30,0.78] to prevent cross-contamination between sections.
+  'Q value':  { Pentacam: [0.00, 0.58, 0.08, 0.65], Sirius: [0.40, 0.68, 0.00, 0.44], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  // Q Post: Pentacam Box 2C / Sirius Shape Indices Col B (posterior section)
+  'Q Post':   { Pentacam: [0.00, 0.58, 0.30, 0.65], Sirius: [0.40, 0.68, 0.45, 0.80] },
+  // Eccentricity (shape factor): Pentacam Box 2B/2C, Galilei Box 3A
+  'Eccentricity': { Pentacam: [0.00, 0.58, 0.08, 0.65], Galilei: [0.38, 1.00, 0.05, 0.45] },
+  // ── Pentacam lower-left / Galilei Box 3C: pachymetry ──────────────────────
+  // Sirius: "Thk" appears in BOTH Col A (KC vertex thickness, x≈0.33-0.52) AND
+  // Col E Summary Indices (true thinnest-point measurement, x≈0.68-1.00).
+  // xMin=0.68 ensures only the Summary Indices "Thk = µm" is used, not the KC vertex Thk.
+  'CCT':           { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.55, 0.85], Galilei: [0.38, 1.00, 0.45, 0.75] },
+  'Thinnest Point':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.55, 0.85], Galilei: [0.38, 1.00, 0.45, 0.75] },
+  'Pachymetry Min':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.55, 0.85] },
+  'Apex Thickness':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.55, 0.85] },
+  'Corneal Volume':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.75, 1.00], Galilei: [0.38, 1.00, 0.45, 0.75] },
+  // ── Biometry: ACD, WTW, AC Volume, AC Angle, Pupil Diameter ───────────────
+  // Sirius: all in Summary Indices Col E (x=0.68-1.00), stacked top-to-bottom.
+  'ACD':          { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.74, 1.00], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  // HWTW is in the AC parameters box of the 4-map display (lower-left, position 4 per atlas §2.1).
+  'WTW':          { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.38, 0.60], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  // AXL: in the same AC parameters box as ACD/HWTW on the 4-map display.
+  'AXL':          { Pentacam: [0.00, 0.58, 0.52, 0.97] },
+  'AC Volume':    { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.77, 1.00], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  'AC Angle':     { Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.77, 1.00], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  'Pupil Diameter':{ Pentacam: [0.00, 0.58, 0.52, 0.97], Sirius: [0.68, 1.00, 0.44, 0.72], Galilei: [0.38, 1.00, 0.60, 0.88] },
+  // ── Pentacam lower-right: Kmax + posterior elevation ───────────────────────
+  'Kmax':               { Pentacam: [0.40, 1.00, 0.08, 0.97] },
+  'Posterior Elevation':{ Pentacam: [0.40, 1.00, 0.52, 0.97] },
+  // SimK1/SimK2 are DEVICE_BLOCK'd for Sirius (regex can't match "Sim-k K1" layout).
+  // Sirius Sim-k keratometry is captured via the plain K1/K2 patterns above instead.
+  // SimK1/SimK2 PARAM_SITES entries are only needed for Pentacam/Galilei if applicable.
+  // ── Sirius KC Screening Col A: KI / ARIndex ──────────────────────────────────
+  // KI is DEVICE_BLOCK'd for Sirius; ARIndex kept for completeness.
+  'KI':      { Sirius: [0.33, 0.55, 0.00, 0.45] },
+  'ARIndex': { Sirius: [0.33, 0.55, 0.00, 0.45] },
+  // ── Sirius Summary Indices Col E: Apex Curvature (under "✗ Apex" header) ───
+  'Apex Curvature': { Sirius: [0.68, 1.00, 0.66, 0.94] },
+  // ── Sirius Shape Indices Col B: surface RMS/A ────────────────────────────────
+  'RMS Ant':  { Sirius: [0.40, 0.68, 0.00, 0.52] },
+  'RMS Post': { Sirius: [0.40, 0.68, 0.30, 0.78] },
+  // ── Sirius KC Screening Col A: KC indices (SIf/SIb/KVf/KVb/BCVf/BCVb) ──────
+  // xMax=0.55 keeps extraction within Col A and prevents confusion with right-panel values.
+  // Front (SIf/KVf/BCVf) appear in upper half of KC Screening, back in lower half.
+  // The KC vertex "Thk" (y≈0.74-0.88) is NOT captured here — Thinnest Point targets Col E.
+  'SIf':  { Sirius: [0.33, 0.55, 0.28, 0.65] },
+  'KVf':  { Sirius: [0.33, 0.55, 0.28, 0.65] },
+  'BCVf': { Sirius: [0.33, 0.55, 0.28, 0.65] },
+  'SIb':  { Sirius: [0.33, 0.55, 0.50, 0.90] },
+  'KVb':  { Sirius: [0.33, 0.55, 0.50, 0.90] },
+  'BCVb': { Sirius: [0.33, 0.55, 0.50, 0.90] },
+  // ── Sirius aberrations (Col A bottom or separate section) ───────────────────
+  'HOA RMS':            { Sirius: [0.33, 1.00, 0.68, 1.00] },
+  'Coma':               { Sirius: [0.33, 1.00, 0.68, 1.00] },
+  'Trefoil':            { Sirius: [0.33, 1.00, 0.68, 1.00] },
+  'Spherical Aberration':{ Sirius: [0.33, 1.00, 0.68, 1.00] },
+  // ── Sirius KC screening panel (Phoenix manual §5.6): Rbf / BCV / C40 / TL ────
+  // Placed in the same middle-column region (x=0.33–0.55) as KVf/BCVf/SIf.
+  // y-range is broad (0.28–0.90) to accommodate all KC panel rows.
+  'Rbf': { Sirius: [0.33, 0.55, 0.28, 0.65] },
+  'BCV': { Sirius: [0.33, 0.55, 0.28, 0.65] },
+  'C40': { Sirius: [0.33, 0.55, 0.28, 0.65] },
+  'TL':  { Sirius: [0.33, 0.55, 0.28, 0.90] },
+  // KC probability indices — bottom of KC screening panel
+  'KPI': { Sirius: [0.33, 0.55, 0.50, 0.95], Galilei: [0.38, 1.00, 0.75, 1.00] },
+  'PPI': { Sirius: [0.33, 0.55, 0.55, 0.95] },
+  // SD: Irregularity of curvature — Optical quality indices, same region as MPP
+  'SD':  { Sirius: [0.52, 0.85, 0.00, 0.40] },
+  // ── Galilei Box 3E: KC probability indices ─────────────────────────────────
+  'PPK':    { Galilei: [0.38, 1.00, 0.75, 1.00] },
+  'CLMIaa': { Galilei: [0.38, 1.00, 0.75, 1.00] },
+  'SAI':    { Galilei: [0.38, 1.00, 0.75, 1.00] },
+  'SRI':    { Galilei: [0.38, 1.00, 0.75, 1.00] },
+  // ── Orbscan Box 3B: irregularity + BFS ratio (broad — no device map available) ─
+  'Irregularity 3mm': { Orbscan: [0.30, 1.00, 0.20, 0.80] },
+  'Irregularity 5mm': { Orbscan: [0.30, 1.00, 0.20, 0.80] },
+  'BFS Ratio':        { Orbscan: [0.30, 1.00, 0.20, 0.80] },
+  // Pentacam BAD/Topometric display is a separate screen (full-width layout).
+  // No spatial restriction for BAD-D, ART-Max, ISV, IVA, CKI, etc.
+};
+
+// OCR words below this confidence level are treated as noise.
+// Sirius uses red/blue colored text for K values which can drop confidence — keep threshold low.
+const MIN_CONFIDENCE = 20;
+// Label words (the ones matching parameter name regex) must be higher confidence
+// to avoid phantom matches from photo borders, shadows, or paper bleed-through.
+const LABEL_MIN_CONFIDENCE = 50;
+
+// Values that must NEVER be accepted for a given parameter, even if inside RANGES.
+// Keratometric index constants (1.3375, 1.336, 1.376) are printed verbatim on K-readings
+// panels of Sirius / Pentacam reports and would otherwise pass the KI range [0.5, 2.5].
+const EXCLUDED_VALUES: Partial<Record<string, Set<number>>> = {
+  'KI': new Set([1.3375, 1.3315, 1.336, 1.376]),
+};
+
+// Parameters that must NEVER appear in results for a given device.
+// Sirius uses SIf/SIb/KVf/KVb/BCVf/BCVb for KC screening — it does NOT report the
+// Pentacam-style KI, CKI, IHD, IHA, PRFI, or BAD-D indices.
+// Including them would produce false positives from incidental text on Sirius printouts.
+export const DEVICE_BLOCK: Partial<Record<string, Set<string>>> = {
+  // Sirius K readings: K1/K2/Km are now NOT blocked — the Sim-k section in the K readings
+  // table uses plain "K1" / "K2" row labels. RANGES[30,65] already rejects the adjacent
+  // posterior K values (K1=-6.xx D, K2=-7.xx D), and PARAM_SITES further gates them to the
+  // Sim-k y-band. SimK1/SimK2 ARE blocked because their regex (/sim\.?k1/) can never match
+  // Sirius's "Sim-k + K1-row" two-line layout — blocking avoids spurious hits elsewhere.
+  // Sirius: KPI and PPI DO exist (Phoenix manual §5.6.3); removing them from block.
+  // PPK is Galilei-only. KI/CKI/IHA/IHD/BAD-D/ISV/IVA/Rmin are Pentacam-only.
+  // TCRP/AXL/B-F Ratio/TKC are Pentacam-only (OCULUS atlas §2.1, §5.3, §6.4, §1.3).
+  'Sirius': new Set(['SimK1', 'SimK2',
+                     'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA', 'Rmin',
+                     'CLMIaa', 'PPK',
+                     'TCRP', 'AXL', 'B/F Ratio', 'TKC',
+                     'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
+  // Pentacam: no Sirius BCV/KV/SI/Rbf/TL/C40/SD/PPI; no Galilei/Orbscan specifics.
+  'Pentacam': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
+                       'BCV', 'Rbf', 'TL', 'C40', 'SD', 'PPI',
+                       'RMS Ant', 'RMS Post', 'Apex Curvature',
+                       'CLMIaa', 'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
+  // Galilei: no Sirius-specific or Pentacam-specific indices; no Orbscan irregularity.
+  'Galilei': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
+                      'BCV', 'Rbf', 'TL', 'C40', 'SD', 'PPI',
+                      'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA',
+                      'RMS Ant', 'RMS Post', 'Apex Curvature',
+                      'TCRP', 'AXL', 'B/F Ratio', 'TKC',
+                      'Irregularity 3mm', 'Irregularity 5mm', 'BFS Ratio']),
+  // Orbscan: no Sirius/Pentacam/Galilei indices; Irregularity/BFS Ratio are Orbscan-specific.
+  'Orbscan': new Set(['SIf', 'SIb', 'KVf', 'KVb', 'BCVf', 'BCVb', 'ARIndex',
+                      'BCV', 'Rbf', 'TL', 'C40', 'SD', 'PPI',
+                      'KI', 'CKI', 'IHA', 'IHD', 'BAD-D', 'PRFI', 'ART-Max', 'ISV', 'IVA',
+                      'RMS Ant', 'RMS Post', 'Apex Curvature', 'CLMIaa',
+                      'TCRP', 'AXL', 'B/F Ratio', 'TKC']),
+};
+
+// Plausible value ranges — values outside are rejected as mis-reads
+export const RANGES: Partial<Record<string, [number, number]>> = {
+  'K1': [30, 65], 'K2': [30, 65], 'Kmax': [30, 70], 'Km': [30, 65],
+  'SimK1': [30, 65], 'SimK2': [30, 65], 'Flat K': [30, 65], 'Steep K': [30, 65],
+  'CCT': [200, 850], 'Thinnest Point': [200, 850], 'Pachymetry Min': [200, 850],
+  'Anterior Elevation': [-500, 500], 'Posterior Elevation': [-500, 500],
+  'BAD-D': [0, 30], 'TBI': [0, 1.05], 'CBI': [0, 1.05],
+  'KVf': [0, 200], 'KVb': [0, 200],
+  'BCVf': [0, 15], 'BCVb': [0, 15],
+  'ISV': [0, 300], 'IVA': [0, 3], 'KI': [0.5, 2.5], 'CKI': [0, 2], 'ARIndex': [0, 2],
+  // IHA in µm per OCULUS atlas §5.3 (normal < 19 µm; extreme KC < 200 µm)
+  'IHA': [0, 200], 'IHD': [0, 0.5], 'Rmin': [3, 10], 'ART-Max': [0, 600],
+  'SIf': [-3, 3], 'SIb': [-1.5, 1.5], 'DSI': [-10, 300], 'OSI': [0, 300],
+  'CSI': [0, 300], 'IAI': [0, 300], 'AAI': [0, 300],
+  'PPI-Avg': [0, 5], 'PPI-Min': [0, 5], 'PRFI': [0, 30],
+  'KISA%': [0, 2000], 'SRAX': [0, 360], 'SAI': [0, 10], 'SRI': [0, 10],
+  'WTW': [8, 16], 'ACD': [1, 6], 'Corneal Volume': [20, 130],
+  'Astigmatism': [-15, 15], 'Q value': [-3, 3], 'Q Post': [-3, 3],
+  'HOA RMS': [0, 10], 'Coma': [0, 5], 'Trefoil': [0, 5], 'Spherical Aberration': [-2, 2],
+  'I-S value': [-20, 20], 'LSA': [0, 10], 'MPP': [35, 55],
+  // Sirius KC screening (Phoenix manual §5.6)
+  'Rbf': [6.0, 10.0], 'BCV': [0, 60], 'TL': [200, 850], 'C40': [-2, 2],
+  // Sirius Optical quality indices
+  'SD': [0, 10],
+  // Sirius Pellucid Probability Index
+  'PPI': [0, 100],
+  'RMS Ant': [0, 20], 'RMS Post': [0, 20],
+  'Flat Radius': [30, 70], 'Steep Radius': [30, 70],
+  'Apex Curvature': [30, 70], 'Apex Thickness': [200, 800],
+  'Pupil Diameter': [1, 10], 'AC Volume': [50, 400],
+  'Eccentricity': [0, 2], 'AC Angle': [5, 60],
+  'KPI': [0, 100], 'PPK': [0, 100], 'CLMIaa': [0, 10],
+  'Irregularity 3mm': [0, 10], 'Irregularity 5mm': [0, 10], 'BFS Ratio': [0.8, 1.5],
+  // Pentacam-specific parameters (OCULUS atlas)
+  'TCRP': [30, 70],        // Total Corneal Refractive Power (D) — both surfaces, ray-traced
+  'AXL': [18, 33],         // Axial length (mm) — PCI; P<2% outside 21–28 mm (atlas §12.8)
+  'B/F Ratio': [50, 120],  // Back/Front radii ratio (%); normal ~82%; < 75.9% = post-myopic LVC
+  'TKC': [0, 4],           // Topographic KC Classification stage
+};
+
+// Unit-anchored validation (inspired by OpenCV/Pytesseract reference implementation).
+// In Pass 0 ("LABEL = VALUE UNIT"), require the value token or the token immediately
+// following it to carry the expected unit. This prevents axis-angle tokens ("@ 54°"),
+// bare percentages, or other nearby numbers from being mistaken for the parameter value
+// when the true value fails RANGES and the scanner falls through to the axis.
+// The regex tests either the number word itself (unit embedded, e.g. "44.12D") or the
+// next word ("D", "µm", "mm"). An absent entry means no unit restriction for that param.
+const PARAM_UNIT_RE: Partial<Record<string, RegExp>> = {
+  'K1':    /^d$/i,  'K2':    /^d$/i,  'Kmax':   /^d$/i,  'Km':    /^d$/i,
+  'SimK1': /^d$/i,  'SimK2': /^d$/i,  'Flat K': /^d$/i,  'Steep K': /^d$/i,
+  'Astigmatism': /^d$/i,
+  // Q value / Q Post are dimensionless — no unit requirement. Omitting these entries
+  // allows Pass 0 to find "Q = 1.21" directly; otherwise the /^d$/i check blocks Pass 0
+  // and forces Pass 1/2 where "Q" may land on a merged OCR line (wrong box position).
+  'MPP': /^d$/i,
+  'Flat Radius': /^d$/i, 'Steep Radius': /^d$/i,
+  'SIf': /^d$/i,  'SIb': /^d$/i,
+  'BCVf': /^d$/i, 'BCVb': /^d$/i,
+  'KVf': /^[µuμ]?m$/i, 'KVb': /^[µuμ]?m$/i,
+  'CCT':           /^[µuμ]m|um|μm$/i,
+  'Thinnest Point':/^[µuμ]m|um|μm$/i,
+  'Pachymetry Min':/^[µuμ]m|um|μm$/i,
+  'Apex Thickness':/^[µuμ]m|um|μm$/i,
+  'ACD':           /^mm$/i,
+  'WTW':           /^mm$/i,
+  'Pupil Diameter':/^mm$/i,
+  'Corneal Volume':/^mm[³3]?$/i,
+  'AC Volume':     /^mm[³3]?$/i,
+  'HOA RMS': /^[µuμ]m|um$/i,
+  'Coma':    /^[µuμ]m|um$/i,
+  'Trefoil': /^[µuμ]m|um$/i,
+  'Spherical Aberration': /^[µuμ]m|um$/i,
+  'RMS Ant': /^[µuμ]m|um$/i,
+  'RMS Post':/^[µuμ]m|um$/i,
+  // Sirius KC screening + Optical quality indices
+  'Rbf': /^mm$/i,
+  'BCV': /^[µuμ]?m$/i, 'TL': /^[µuμ]?m$/i, 'C40': /^[µuμ]?m$/i,
+  'SD': /^d$/i,
+  // Pentacam-specific (OCULUS atlas §5.3, §1.3, §11.1)
+  'IHA': /^[µuμ]m|um|μm$/i,  // Index of Height Asymmetry in µm
+  'TCRP': /^d$/i,             // Total Corneal Refractive Power in D
+  'AXL': /^mm$/i,             // Axial length in mm
+};
+
+// Extract numeric value from OCR'd text — tolerates units attached to digits
+function parseNum(raw: string): number | null {
+  const s = raw.replace(',', '.').replace(/[°µDmm%³]+$/i, '').replace(/^[^\d\-]+/, '');
+  if (!s || !/\d/.test(s)) return null;
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+/**
+ * Find the nearest valid numeric word to `label` using 2D spatial proximity
+ * rather than linear word-order. This prevents crossing column boundaries
+ * in multi-column report layouts (Pentacam, Sirius, Galilei, etc.).
+ *
+ * Tier 1: same row, to the right, within 32% of image width.
+ * Tier 2: one row below, roughly same horizontal zone.
+ */
+function nearbyNum(
+  label: Word,
+  pool: Word[],
+  imgW: number,
+  imgH: number,
+  patName?: string
+): Word | undefined {
+  const lCy = (label.bbox.y0 + label.bbox.y1) / 2;
+  const lX1 = label.bbox.x1;
+  const rowH = imgH * 0.028;
+
+  function valid(w: Word): boolean {
+    const n = parseNum(w.text);
+    if (n === null) return false;
+    const rng = patName ? RANGES[patName] : undefined;
+    if (rng && (n < rng[0] || n > rng[1])) return false;
+    const excl = patName ? EXCLUDED_VALUES[patName] : undefined;
+    if (excl && excl.has(n)) return false;
+    return true;
+  }
+
+  // Tier 1: same row, to the right
+  const tier1 = pool.filter(w => {
+    if (!valid(w)) return false;
+    const cy = (w.bbox.y0 + w.bbox.y1) / 2;
+    const cx = (w.bbox.x0 + w.bbox.x1) / 2;
+    return Math.abs(cy - lCy) <= rowH
+        && cx > lX1 - imgW * 0.01
+        && cx <= lX1 + imgW * 0.32;
+  });
+  if (tier1.length) return tier1.sort((a, b) => a.bbox.x0 - b.bbox.x0)[0];
+
+  // Tier 2: up to 4 rows below, similar horizontal zone.
+  // Extended from 2.5→4 rowH to handle multi-line section headers like
+  // "Thinnest location\n  x=...\n  Thk = 553 µm" where the value is
+  // 2-3 rows below the section title rather than on the same line.
+  const tier2 = pool.filter(w => {
+    if (!valid(w)) return false;
+    const cy = (w.bbox.y0 + w.bbox.y1) / 2;
+    const cx = (w.bbox.x0 + w.bbox.x1) / 2;
+    return cy > lCy + rowH * 0.3
+        && cy <= lCy + rowH * 4
+        && cx >= label.bbox.x0 - imgW * 0.04
+        && cx <= lX1 + imgW * 0.22;
+  });
+  return tier2.sort((a, b) => (a.bbox.y0 - b.bbox.y0) || (a.bbox.x0 - b.bbox.x0))[0];
+}
+
+// Preprocess image for OCR: normalise scale, stretch contrast, local adaptive threshold.
+// Returns the processed dataUrl AND exact canvas pixel dimensions (used as bbox coordinate space).
+// Do NOT use max(word.bbox.x1/y1) as image size — camera photos have empty desk background,
+// so max-word coords underestimate height and push every overlay box downward.
+async function preprocessForOCR(dataUrl: string): Promise<{ url: string; w: number; h: number }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const W = img.naturalWidth  || img.width  || 1;
+      const H = img.naturalHeight || img.height || 1;
+      // Normalise longest edge to ~3000 px.
+      // Upscaling small screenshots gives more pixels per character;
+      // downscaling a 4000 px phone photo reduces per-pixel sensor noise.
+      const scale = Math.min(3, 3000 / Math.max(W, H));
+      const canvas = document.createElement('canvas');
+      const cW = canvas.width  = Math.round(W * scale);
+      const cH = canvas.height = Math.round(H * scale);
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, cW, cH);
+      const id = ctx.getImageData(0, 0, cW, cH);
+      const d = id.data;
+
+      // Step 1: Luminance-weighted grayscale (handles coloured Sirius K-value text).
+      for (let i = 0; i < d.length; i += 4) {
+        const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        d[i] = d[i + 1] = d[i + 2] = g;
+      }
+
+      // Step 2: Contrast normalisation — stretch [min, max] → [0, 255].
+      // Rescues washed-out or under-exposed phone photos without any tuning.
+      let minG = 255, maxG = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] < minG) minG = d[i];
+        if (d[i] > maxG) maxG = d[i];
+      }
+      const gRange = maxG - minG || 1;
+      for (let i = 0; i < d.length; i += 4) {
+        const v = Math.round((d[i] - minG) * 255 / gRange);
+        d[i] = d[i + 1] = d[i + 2] = v;
+      }
+
+      // Step 3: Per-pixel adaptive threshold — sliding column-sum approach.
+      // Equivalent to cv2.adaptiveThreshold(gray,255,ADAPTIVE_THRESH_MEAN_C,
+      // THRESH_BINARY,11,2): each pixel is thresholded against the mean of its
+      // 11×11 neighbourhood minus C=2.
+      //
+      // Uses a column-sum array (O(W) space, O(W×H) time) instead of a full
+      // integral image (which would require a ~96 MB Float64Array and can OOM
+      // the Android WebView JS heap).
+      //
+      // Algorithm:
+      //   colSum[x] = sum of pixel values in column x over the current row-window.
+      //   For each row y we slide the window down (add new bottom row, remove old
+      //   top row). Within each row we slide a running horizontal sum across colSum.
+      const HALF_K = 5;   // → 11×11 window (matches Python blockSize=11)
+      const C_THRESH = 10; // C=2 (Python's value) is too aggressive for phone photos:
+                            // background pixels 10 units below local mean become black,
+                            // creating salt-and-pepper noise Tesseract can't parse.
+                            // C=10 matches the effective offset from v2.48 but now applied
+                            // per-pixel (no block boundaries) for cleaner character strokes.
+      const colSum = new Float32Array(cW);
+      const bin = new Uint8Array(cW * cH);
+
+      // Seed colSum with rows 0..HALF_K (the initial window for y=0)
+      for (let y2 = 0; y2 <= Math.min(HALF_K, cH - 1); y2++)
+        for (let x = 0; x < cW; x++)
+          colSum[x] += d[(y2 * cW + x) * 4];
+
+      for (let y = 0; y < cH; y++) {
+        // Slide the vertical window: add new bottom row, remove departing top row
+        if (y > 0) {
+          const addRow = y + HALF_K;
+          if (addRow < cH)
+            for (let x = 0; x < cW; x++) colSum[x] += d[(addRow * cW + x) * 4];
+          const remRow = y - HALF_K - 1;
+          if (remRow >= 0)
+            for (let x = 0; x < cW; x++) colSum[x] -= d[(remRow * cW + x) * 4];
+        }
+        const rowH = Math.min(cH - 1, y + HALF_K) - Math.max(0, y - HALF_K) + 1;
+
+        // Seed the horizontal running sum for x=0
+        let hSum = 0;
+        for (let x2 = 0; x2 <= Math.min(HALF_K, cW - 1); x2++) hSum += colSum[x2];
+
+        for (let x = 0; x < cW; x++) {
+          if (x > 0) {
+            const addCol = x + HALF_K;
+            if (addCol < cW) hSum += colSum[addCol];
+            const remCol = x - HALF_K - 1;
+            if (remCol >= 0) hSum -= colSum[remCol];
+          }
+          const colW = Math.min(cW - 1, x + HALF_K) - Math.max(0, x - HALF_K) + 1;
+          bin[y * cW + x] = d[(y * cW + x) * 4] > hSum / (rowH * colW) - C_THRESH ? 255 : 0;
+        }
+      }
+      for (let i = 0; i < cW * cH; i++) {
+        const idx = i * 4;
+        d[idx] = d[idx + 1] = d[idx + 2] = bin[i];
+      }
+
+      // Step 4: 3×3 median filter — removes salt-and-pepper noise introduced by
+      // binarization. Mirrors cv2.medianBlur(binary, 3) from the Python reference.
+      const src = new Uint8ClampedArray(d);
+      for (let y = 1; y < cH - 1; y++) {
+        for (let x = 1; x < cW - 1; x++) {
+          const vals: number[] = [];
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dx = -1; dx <= 1; dx++)
+              vals.push(src[((y + dy) * cW + (x + dx)) * 4]);
+          vals.sort((a, b) => a - b);
+          const idx = (y * cW + x) * 4;
+          d[idx] = d[idx + 1] = d[idx + 2] = vals[4]; // median of 9
+        }
+      }
+
+      ctx.putImageData(id, 0, 0);
+      resolve({ url: canvas.toDataURL('image/jpeg', 0.92), w: cW, h: cH });
+    };
+    img.onerror = () => {
+      const fallback = document.createElement('canvas');
+      fallback.width = 1; fallback.height = 1;
+      resolve({ url: dataUrl, w: 1, h: 1 });
+    };
+    img.src = dataUrl;
+  });
+}
+
+// Scale image to ~3000px longest edge without binarization.
+// ML Kit performs its own internal preprocessing — passing a colour image
+// gives it the best chance to read coloured K-value text on Sirius prints.
+async function scaleForBridge(dataUrl: string): Promise<{ url: string; w: number; h: number }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const W = img.naturalWidth || img.width || 1;
+      const H = img.naturalHeight || img.height || 1;
+      const scale = Math.min(3, 3000 / Math.max(W, H));
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.round(W * scale);
+      canvas.height = Math.round(H * scale);
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      resolve({ url: canvas.toDataURL('image/jpeg', 0.92), w: canvas.width, h: canvas.height });
+    };
+    img.onerror = () => resolve({ url: dataUrl, w: 1, h: 1 });
+    img.src = dataUrl;
+  });
+}
+
+// Call OcrBridge.recognizeImage and wait for the async JS callback.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function callBridge(bridge: any, base64: string, onProgress: (m: string) => void): Promise<{
+  words: Word[]; imgW: number; imgH: number;
+}> {
+  return new Promise((resolve, reject) => {
+    const cbName = `_mlkitCb_${Date.now()}_${Math.floor(Math.random() * 1e9)}`;
+    const timer = setTimeout(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (window as any)[cbName];
+      reject(new Error('ML Kit OCR timed out'));
+    }, 45_000);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any)[cbName] = (result: any) => {
+      clearTimeout(timer);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (window as any)[cbName];
+      if (!result) { reject(new Error('ML Kit returned null')); return; }
+      const words: Word[] = (result.words ?? []).map((w: any) => ({
+        text: String(w.text),
+        confidence: Number(w.confidence ?? 90),
+        bbox: { x0: Number(w.x0), y0: Number(w.y0), x1: Number(w.x1), y1: Number(w.y1) },
+      }));
+      resolve({ words, imgW: Number(result.imgW), imgH: Number(result.imgH) });
+    };
+
+    onProgress('Running ML Kit OCR…');
+    bridge.recognizeImage(base64, cbName);
+  });
+}
+
+// Full analysis using the Android ML Kit bridge instead of Tesseract.
+// All parameter matching/classification code is shared — only the word
+// acquisition step is different.
+async function analyzeWithMLKitBridge(
+  imageDataUrl: string,
+  onProgress: (msg: string) => void,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  bridge: any,
+): Promise<AnalysisResult> {
+  onProgress('Preparing image…');
+  const { url: scaledUrl } = await scaleForBridge(imageDataUrl);
+
+  let words: Word[];
+  let imgWidth: number;
+  let imgHeight: number;
+
+  try {
+    const r = await callBridge(bridge, scaledUrl, onProgress);
+    words    = r.words;
+    imgWidth = r.imgW;
+    imgHeight= r.imgH;
+  } catch (err) {
+    throw new Error(`ML Kit failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // ── Shared parameter-matching logic (identical to Tesseract path) ───────────
+  return matchParameters(words, imgWidth, imgHeight, onProgress);
+}
+
+export async function analyzeWithOCR(
+  imageDataUrl: string,
+  onProgress: (msg: string) => void
+): Promise<AnalysisResult> {
+
+  // ── ML Kit native bridge (Android v3.x) ────────────────────────────────────
+  // When running inside the android-mlkit APK, window.Android.recognizeImage
+  // is injected by OcrBridge.java. Use it instead of Tesseract so we get
+  // Google ML Kit's neural-network text recognition instead of WASM Tesseract.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bridge = (window as any).Android;
+  if (typeof bridge?.recognizeImage === 'function') {
+    return analyzeWithMLKitBridge(imageDataUrl, onProgress, bridge);
+  }
+
+  // ── Tesseract.js fallback (web / older APK) ─────────────────────────────────
+  const tesseractBase = 'http://localhost/tesseract/';
+
+  onProgress('Downloading language model…');
+  const [workerText, langBuffer] = await Promise.all([
+    fetch(tesseractBase + 'worker.min.js').then((r) => r.text()),
+    fetch(tesseractBase + 'eng.traineddata').then((r) => r.arrayBuffer()),
+  ]);
+
+  onProgress('Preparing OCR engine…');
+
+  const langBlobUrl = URL.createObjectURL(
+    new Blob([langBuffer], { type: 'application/octet-stream' })
+  );
+
+  const patch = `(function(){var D=${JSON.stringify(langBlobUrl)};var _f=self.fetch.bind(self);self.fetch=function(u,o){return(typeof u==='string'&&u.indexOf('.traineddata')!==-1)?_f(D,o):_f(u,o);};var _x=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var a=[].slice.call(arguments);if(typeof u==='string'&&u.indexOf('.traineddata')!==-1)a[1]=D;return _x.apply(this,a);};})();\n`;
+
+  const workerBlobUrl = URL.createObjectURL(
+    new Blob([patch, workerText], { type: 'application/javascript' })
+  );
+
+  const worker = await createWorker('eng', 1, {
+    workerPath:  workerBlobUrl,
+    corePath:    tesseractBase + 'tesseract-core-lstm.wasm.js',
+    langPath:    tesseractBase,
+    cacheMethod: 'none' as const,
+    logger: (m: { status: string; progress: number }) => {
+      if (m.status === 'recognizing text') {
+        onProgress(`Scanning… ${Math.round(m.progress * 100)}%`);
+      } else if (m.status === 'loading tesseract core') {
+        onProgress('Loading OCR engine…');
+      } else if (m.status === 'loading language traineddata') {
+        onProgress('Loading language model…');
+      } else if (m.status === 'initializing tesseract') {
+        onProgress('Initializing OCR…');
+      }
+    },
+  });
+
+  // PSM 3 = Fully automatic page segmentation — gives reliable line bboxes so every word
+  // in a visual row shares the same y-coordinates, preventing per-word y-drift.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (worker as any).setParameters({
+    tessedit_pageseg_mode: '3',
+    preserve_interword_spaces: '1',
+  });
+
+  onProgress('Preprocessing image…');
+  const { url: processedUrl, w: canvasW, h: canvasH } = await preprocessForOCR(imageDataUrl);
+
+  const b64 = processedUrl.slice(processedUrl.indexOf(',') + 1);
+  const binaryStr = atob(b64);
+  const imgBytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) imgBytes[i] = binaryStr.charCodeAt(i);
+
+  onProgress('Running OCR…');
+
+  let words: Word[] = [];
+  // Use exact canvas dimensions as the coordinate space for OCR bboxes.
+  // Do NOT use max(word.bbox.x1/y1): if the printout occupies only the top portion
+  // of a camera photo, the max-word approach gives a height much smaller than the
+  // real image, inflating all y-fractions and pushing every overlay box downward.
+  let imgWidth  = canvasW;
+  let imgHeight = canvasH;
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data } = await worker.recognize(imgBytes as any, {}, { blocks: true } as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const page = data as any;
+
+    for (const block of (page.blocks ?? [])) {
+      for (const para of (block.paragraphs ?? [])) {
+        for (const line of (para.lines ?? [])) {
+          // Use the Tesseract LINE's bbox for y-coordinates rather than individual word bboxes.
+          // With PSM-3, line segmentation is reliable: all words on the same visual row share
+          // the same line bbox, eliminating per-word y-drift that caused boxes to land on
+          // the wrong row.
+          //
+          // Exception: when Tesseract merges two adjacent visual rows into one OCR line
+          // (which happens in densely-spaced sections like Sirius Shape Indices), the merged
+          // line bbox spans both rows. If we apply the y-override there, all words get the
+          // same mid-point y and the box lands between rows. Guard: only override when the
+          // line height is < 4 % of image height (≈ single row). For taller merged lines,
+          // fall back to per-word bboxes so the y-grouping code correctly separates the rows.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const lel = line as any;
+          const lineY0: number | undefined = lel.bbox?.y0;
+          const lineY1: number | undefined = lel.bbox?.y1;
+          const singleRowLine =
+            lineY0 !== undefined && lineY1 !== undefined &&
+            (lineY1 - lineY0) < imgHeight * 0.04;
+          for (const word of (line.words ?? [])) {
+            const w = word as Word;
+            if (w.confidence >= MIN_CONFIDENCE) {
+              words.push(singleRowLine ? {
+                ...w,
+                bbox: { x0: w.bbox.x0, y0: lineY0!, x1: w.bbox.x1, y1: lineY1! },
+              } : w);
+            }
+          }
+        }
+      }
+    }
+
+  } finally {
+    await worker.terminate();
+    URL.revokeObjectURL(workerBlobUrl);
+    URL.revokeObjectURL(langBlobUrl);
+  }
+
+  return matchParameters(words, imgWidth, imgHeight, onProgress);
+}
+
+// Tesseract sometimes tokenises "42.36" as two words: "42" and ".36".
+// This merges adjacent tokens that form a single decimal number or negative sign,
+// so Pass 0 ("LABEL = VALUE UNIT") can match the complete value before the unit.
+function joinSplitDecimals(words: Word[]): Word[] {
+  if (words.length < 2) return words;
+  const out: Word[] = [];
+  let i = 0;
+  while (i < words.length) {
+    const w = words[i];
+    const nxt = i + 1 < words.length ? words[i + 1] : null;
+    if (nxt) {
+      const sameY = Math.abs((w.bbox.y0 + w.bbox.y1) / 2 - (nxt.bbox.y0 + nxt.bbox.y1) / 2)
+                    < (w.bbox.y1 - w.bbox.y0) * 1.5;
+      if (sameY && (
+        (/\d$/.test(w.text)   && /^\.\d/.test(nxt.text)) ||   // "42" + ".36"
+        (/\d\.$/.test(w.text) && /^\d/.test(nxt.text))   ||   // "42." + "36"
+        (w.text === '-'        && /^\d/.test(nxt.text))        // "-" + "0.12"
+      )) {
+        out.push({
+          text: w.text + nxt.text,
+          confidence: Math.min(w.confidence, nxt.confidence),
+          bbox: {
+            x0: w.bbox.x0, y0: Math.min(w.bbox.y0, nxt.bbox.y0),
+            x1: nxt.bbox.x1, y1: Math.max(w.bbox.y1, nxt.bbox.y1),
+          },
+        });
+        i += 2;
+        continue;
+      }
+    }
+    out.push(w);
+    i++;
+  }
+  return out;
+}
+
+// ── Shared parameter-matching logic ───────────────────────────────────────────
+// Called by analyzeWithOCR (Tesseract/MLKit) and pdfAnalyzer (text-layer extraction).
+export function matchParameters(
+  wordsIn: Word[],
+  imgWidth: number,
+  imgHeight: number,
+  onProgress: (msg: string) => void,
+): AnalysisResult {
+  // Merge split decimal tokens before any passes so "42" ".36" "D" becomes "42.36" "D".
+  let words = joinSplitDecimals(wordsIn);
+
+  onProgress('Parsing parameters…');
+
+  // Remove isolated words — phantom OCR reads in blank paper areas and dark
+  // photo borders are always isolated (no neighbouring text around them).
+  // Real text on a medical report is always surrounded by other words.
+  // We keep imgWidth/imgHeight unchanged so pixel→fraction mapping stays correct.
+  if (words.length > 4) {
+    words = words.filter(w => {
+      const cy = (w.bbox.y0 + w.bbox.y1) / 2;
+      const cx = (w.bbox.x0 + w.bbox.x1) / 2;
+      let neighbours = 0;
+      for (const other of words) {           // 'words' still the original array here
+        if (other === w) continue;
+        if (Math.abs((other.bbox.y0 + other.bbox.y1) / 2 - cy) < imgHeight * 0.08 &&
+            Math.abs((other.bbox.x0 + other.bbox.x1) / 2 - cx) < imgWidth  * 0.35) {
+          if (++neighbours >= 2) return true; // enough neighbours → keep
+        }
+      }
+      return false; // isolated → discard
+    });
+  }
+
+  // Group words into lines by Y-centre proximity (1.5% of image height)
+  const lineThreshold = imgHeight * 0.015;
+  const lines: Word[][] = [];
+  for (const word of words) {
+    const cy = (word.bbox.y0 + word.bbox.y1) / 2;
+    const existing = lines.find(
+      (l) => Math.abs((l[0].bbox.y0 + l[0].bbox.y1) / 2 - cy) < lineThreshold
+    );
+    if (existing) existing.push(word);
+    else lines.push([word]);
+  }
+  for (const line of lines) line.sort((a, b) => a.bbox.x0 - b.bbox.x0);
+
+  const found = new Map<string, { value: number; unit: string; x: number; y: number; w: number; h: number; pass: number }>();
+
+  // Record a found parameter.
+  // x always anchors at the label's left edge.
+  // y: with PSM-3 + line-bbox override, all words on the same visual row share the same
+  //    y-coordinates (sameRow=true). When spatial search finds a value on a different row
+  //    (sameRow=false — e.g. "Thinnest location" header → "481" below), the value word
+  //    IS on the correct data row so we use its y.
+  function recordHit(pat: { name: string; unit: string }, labelWord: Word, numWord: Word, pass: number) {
+    if (found.has(pat.name)) return;
+    const value = parseNum(numWord.text);
+    if (value === null) return;
+    const rng = RANGES[pat.name];
+    if (rng && (value < rng[0] || value > rng[1])) return;
+    const excl = EXCLUDED_VALUES[pat.name];
+    if (excl && excl.has(value)) return;
+
+    const lCy = (labelWord.bbox.y0 + labelWord.bbox.y1) / 2;
+    const nCy = (numWord.bbox.y0 + numWord.bbox.y1) / 2;
+    const sameRow = Math.abs(lCy - nCy) < imgHeight * 0.028;
+
+    const x0 = labelWord.bbox.x0;
+    const x1 = sameRow ? Math.max(labelWord.bbox.x1, numWord.bbox.x1) : labelWord.bbox.x1;
+
+    // Same row → use label's line y (both share it; also covers Pass 0 exact-line matches).
+    // Different rows → use value's line y (the value IS on the correct data row).
+    const yWord = sameRow ? labelWord : numWord;
+    const y0 = yWord.bbox.y0;
+    const y1 = yWord.bbox.y1;
+
+    found.set(pat.name, {
+      value, unit: pat.unit,
+      x: (x0 + x1) / 2 / imgWidth,
+      y: (y0 + y1) / 2 / imgHeight,
+      w: (x1 - x0) / imgWidth,
+      h: (y1 - y0) / imgHeight,
+      pass,
+    });
+  }
+
+  // Helper: does this word qualify as a label anchor?
+  const isLabel = (w: Word) => w.confidence >= LABEL_MIN_CONFIDENCE;
+
+  // Helper: is this label word immediately followed by "=" on the same line?
+  // If so, Passes 1/2 must NOT use spatial search from this position —
+  // it was already tried in Pass 0 and the value was out of range.
+  // Spatial search from a "LABEL =" position would cross into adjacent columns.
+  const hasEqualsAfter = (line: Word[], wi: number) =>
+    line.slice(wi + 1, wi + 4).some(w => w.text.trim() === '=');
+
+  // Pass 0: "LABEL = VALUE" — handles Sirius format "K1 = 41.56 D @ 12°"
+  // Uses MIN_CONFIDENCE (not LABEL_MIN_CONFIDENCE) for the label word because the
+  // explicit "=" guard + RANGES + PARAM_UNIT_RE already make false positives
+  // extremely unlikely. This lets abbreviated labels like "Thk" pass even when
+  // Tesseract gives them borderline confidence.
+  for (const line of lines) {
+    for (const pat of PARAM_PATTERNS) {
+      if (found.has(pat.name)) continue;
+      let labelWord: Word | undefined;
+      let eqIdx = -1;
+      for (let wi = 0; wi < line.length; wi++) {
+        if (line[wi].confidence < MIN_CONFIDENCE) continue;
+        const joined = line.slice(wi, wi + 2).map(w => w.text).join(' ');
+        if (pat.regex.test(line[wi].text) || pat.regex.test(joined)) {
+          labelWord = line[wi];
+          // "=" must appear within the next 3 words (handles "K1 = ", "Cyl = ", etc.)
+          for (let j = wi + 1; j <= wi + 3 && j < line.length; j++) {
+            if (line[j].text.trim() === '=') { eqIdx = j; break; }
+          }
+          break;
+        }
+      }
+      if (!labelWord || eqIdx < 0) continue;
+      const candidates = line.slice(eqIdx + 1);
+      const numWord = candidates.find((w, idx) => {
+        const n = parseNum(w.text);
+        if (n === null) return false;
+        const rng = RANGES[pat.name];
+        if (rng && (n < rng[0] || n > rng[1])) return false;
+        // Reject axis-angle values: a number immediately preceded by "@" is an axis direction
+        // (e.g. "K1 = -6.23 D @ 54°") — not the parameter value.
+        if (idx > 0 && candidates[idx - 1].text.trim() === '@') return false;
+        // Unit-anchored validation (from Python/OpenCV reference): require the value word
+        // or the immediately following word to carry the expected unit (D, µm, mm, etc.).
+        // Axis angles (°), page numbers, and other stray numerics lack the expected unit
+        // and are rejected here. If the word itself contains the unit (e.g. "44.12D"),
+        // strip digits and test the remainder; otherwise test the next candidate word.
+        const unitRe = PARAM_UNIT_RE[pat.name];
+        if (unitRe) {
+          const embeddedUnit = w.text.replace(/[\d\.\-,\s]/g, '').trim();
+          const w1 = idx + 1 < candidates.length ? candidates[idx + 1].text.trim() : '';
+          const w2 = idx + 2 < candidates.length ? candidates[idx + 2].text.trim() : '';
+          if (!unitRe.test(embeddedUnit) && !unitRe.test(w1) && !unitRe.test(w2)) return false;
+        }
+        return true;
+      });
+      if (numWord) recordHit(pat, labelWord, numWord, 0);
+    }
+  }
+
+  // Pass 1: match full line text, then locate the label word and search spatially.
+  // Skip positions where the label is immediately followed by "=" — those were
+  // handled (and rejected) by Pass 0; spatial search there would cross columns.
+  for (const line of lines) {
+    const lineText = line.map((w) => w.text).join(' ');
+    for (const pat of PARAM_PATTERNS) {
+      if (found.has(pat.name) || !pat.regex.test(lineText)) continue;
+      let labelWord: Word | undefined;
+      for (let wi = 0; wi < line.length; wi++) {
+        if (!isLabel(line[wi])) continue;
+        if (hasEqualsAfter(line, wi)) continue; // already tried by Pass 0
+        const joined = line.slice(wi, wi + 2).map((w) => w.text).join(' ');
+        if (pat.regex.test(line[wi].text) || pat.regex.test(joined)) {
+          labelWord = line[wi];
+          break;
+        }
+      }
+      if (!labelWord) continue;
+      const numWord = nearbyNum(labelWord, line, imgWidth, imgHeight, pat.name);
+      if (numWord) recordHit(pat, labelWord, numWord, 1);
+    }
+  }
+
+  // Pass 2: spatial search across the full word pool.
+  // Same "skip if followed by =" guard as Pass 1.
+  for (const pat of PARAM_PATTERNS) {
+    if (found.has(pat.name)) continue;
+    outer: for (let li = 0; li < lines.length; li++) {
+      const line = lines[li];
+      for (let wi = 0; wi < line.length; wi++) {
+        if (!isLabel(line[wi])) continue;
+        if (hasEqualsAfter(line, wi)) continue;
+        const joined = line.slice(wi, wi + 2).map((w) => w.text).join(' ');
+        if (!pat.regex.test(line[wi].text) && !pat.regex.test(joined)) continue;
+        const labelWord = line[wi];
+        const numWord = nearbyNum(labelWord, words, imgWidth, imgHeight, pat.name);
+        if (numWord) { recordHit(pat, labelWord, numWord, 2); break outer; }
+      }
+    }
+  }
+
+  // Pass 3: value appears BEFORE label on the same line (reverse scan)
+  for (const pat of PARAM_PATTERNS) {
+    if (found.has(pat.name)) continue;
+    outer: for (let li = 0; li < lines.length; li++) {
+      const line = lines[li];
+      for (let wi = 0; wi < line.length; wi++) {
+        if (!isLabel(line[wi])) continue;
+        const joined = line.slice(wi, wi + 2).map((w) => w.text).join(' ');
+        if (!pat.regex.test(line[wi].text) && !pat.regex.test(joined)) continue;
+        const labelWord = line[wi];
+        const before = line.slice(0, wi).filter(w => {
+          const n = parseNum(w.text);
+          if (n === null) return false;
+          const rng = RANGES[pat.name];
+          return !rng || (n >= rng[0] && n <= rng[1]);
+        });
+        const numWord = before[before.length - 1];
+        if (numWord) { recordHit(pat, labelWord, numWord, 3); break outer; }
+      }
+    }
+  }
+
+  if (found.size === 0) {
+    const sample = words.slice(0, 20).map((w) => w.text).filter(Boolean).join('  ');
+    throw new Error(
+      'No parameters found in this image.\n\n' +
+      (sample ? `OCR read: "${sample}"\n\n` : 'OCR detected no text.\n\n') +
+      'Tips:\n' +
+      '• Screenshot the DATA/NUMBERS panel — not only the colour map\n' +
+      '• Crop the image to show just the parameter table\n' +
+      '• Use a clear, high-resolution, unrotated screenshot\n' +
+      '• Supported: Pentacam, Sirius, Galilei, Orbscan, Atlas'
+    );
+  }
+
+  const fullText = words.map((w) => w.text).join(' ').toLowerCase();
+  let device = 'Unknown';
+  if (/pentacam|oculus/i.test(fullText))       device = 'Pentacam';
+  // Sirius identifiers: brand text, KC screening labels (KVf/BCVf), K readings table
+  // markers (n1=1.3375 keratometric index, Sim-k section header, Coverage(SC.) metric).
+  // Multiple fallbacks ensure detection works even when only the K readings panel is
+  // photographed (no KC Screening section visible → no KVf/BCVf text).
+  else if (/sirius|cso|\bkvf\b|\bkv[bf]\b|\bbcv[fb]\b|1\.3375|\bsim[\-\.]k\b|coverage\s*\(\s*sc/i.test(fullText)) device = 'Sirius';
+  else if (/galilei|ziemer/i.test(fullText))   device = 'Galilei';
+  else if (/orbscan|bausch/i.test(fullText))   device = 'Orbscan';
+  else if (/atlas|zeiss/i.test(fullText))      device = 'Atlas';
+
+  // Panel-region filter (x-axis): remove hits outside the device's data-table column.
+  // Eliminates false positives from colour-map labels, scale bars, axis legends.
+  const panel = DEVICE_PANEL[device];
+  if (panel) {
+    for (const [name, d] of found) {
+      if (d.x < panel[0] || d.x > panel[1]) found.delete(name);
+    }
+  }
+
+  // Section-region filter (x + y): remove hits outside the parameter's known
+  // bounding box [xMin, xMax, yMin, yMax] within the printout.
+  // Each device has a confirmed panel layout (see PARAM_SITES above).
+  for (const [name, d] of found) {
+    if (d.pass === 0) continue;          // Pass 0: same-line label=value, no spatial filter needed
+    const sites = PARAM_SITES[name];
+    if (!sites) continue;
+    const bounds = sites[device];
+    if (!bounds) continue;
+    if (d.x < bounds[0] || d.x > bounds[1] || d.y < bounds[2] || d.y > bounds[3]) {
+      found.delete(name);
+    }
+  }
+
+  // Device-specific parameter blocklist: hard-remove indices that belong only to
+  // the other device family (Pentacam vs Sirius) to prevent cross-contamination.
+  const block = DEVICE_BLOCK[device];
+  if (block) {
+    for (const name of block) found.delete(name);
+  }
+
+  // Ensure K1 ≤ K2 (K1 = flat/lower meridian per clinical convention).
+  // If OCR picks up K1 and K2 from different rows of the multi-zone table and swaps them,
+  // this guard corrects the assignment without discarding either value.
+  const k1d = found.get('K1'), k2d = found.get('K2');
+  if (k1d && k2d && k1d.value > k2d.value) {
+    const tmp = { ...k1d };
+    found.set('K1', { ...k2d, unit: k1d.unit });
+    found.set('K2', { ...tmp, unit: k2d.unit });
+  }
+
+  let eye: AnalysisResult['eye'] = 'unknown';
+  if (/\bod\b|right\s+eye/i.test(fullText)) eye = 'OD';
+  else if (/\bos\b|left\s+eye/i.test(fullText)) eye = 'OS';
+  else if (/\bou\b/i.test(fullText)) eye = 'OU';
+
+  // Build entries AFTER all spatial filters so only passing parameters are included.
+  // (Moving this before filters caused filtered-out params to still appear as boxes.)
+  const entries = Array.from(found.entries()).map(([name, d]) => ({
+    name, value: d.value, unit: d.unit,
+    x: d.x, y: d.y,
+    width:  Math.min(Math.max(d.w, 0.04), 0.40),
+    height: Math.min(Math.max(d.h, 0.02), 0.06),
+  }));
+
+  const base_result = buildResult(entries, device, eye);
+  return {
+    ...base_result,
+    parameters: base_result.parameters.map((p, i) => ({
+      ...p,
+      x: entries[i]?.x ?? 0,
+      y: entries[i]?.y ?? 0,
+      width:  entries[i]?.width ?? 0,
+      height: entries[i]?.height ?? 0,
+    })),
+  };
+}
